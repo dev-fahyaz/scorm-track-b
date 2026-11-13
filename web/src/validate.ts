@@ -18,14 +18,70 @@ function durationOk(value: string): boolean {
   return trimmed !== "PT" && DURATION.test(trimmed);
 }
 
-export function validateForm(form: PackageForm): Record<string, string> {
+function httpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function validateLessons(
+  form: PackageForm,
+  options?: { quizzes?: boolean }
+): Record<string, string> {
   const errors: Record<string, string> = {};
+  if (!form.organization.trim()) {
+    errors.organization = "Enter an organization.";
+  }
+  if (!form.lessons.length) {
+    errors.lessons = "Add at least one lesson.";
+  }
+  form.lessons.forEach((lesson, lessonIndex) => {
+    if (!lesson.items.length) {
+      errors[`lesson-items-${lessonIndex}`] = "Add a video or a quiz.";
+      return;
+    }
+    lesson.items.forEach((item, itemIndex) => {
+      if (item.type === "video") {
+        const url = item.url.trim();
+        if (!url || !httpsUrl(url)) {
+          errors[`item-url-${lessonIndex}-${itemIndex}`] = "Enter an https file URL or a YouTube link.";
+        }
+        return;
+      }
+      if (!options?.quizzes) return;
+      if (!item.questions.length) {
+        errors[`quiz-${lessonIndex}-${itemIndex}`] = "Add a question.";
+        return;
+      }
+      item.questions.forEach((question, questionIndex) => {
+        const key = `${lessonIndex}-${itemIndex}-${questionIndex}`;
+        if (!question.prompt.trim()) {
+          errors[`quiz-prompt-${key}`] = "Enter a question.";
+        }
+        const filled = question.choices.filter((choice) => choice.text.trim());
+        if (question.choices.length < 2 || question.choices.length > 6 || filled.length !== question.choices.length) {
+          errors[`quiz-choices-${key}`] = "Enter 2 to 6 choices.";
+        }
+        if (!question.choices.some((choice) => choice.id === question.correctId && choice.text.trim())) {
+          errors[`quiz-correct-${key}`] = "Mark one correct choice.";
+        }
+      });
+    });
+  });
+  return errors;
+}
+
+export function needsDraft(form: PackageForm): boolean {
+  return !form.title.trim() || !form.identifier.trim() || !form.description.trim();
+}
+
+export function validateForm(form: PackageForm): Record<string, string> {
+  const errors = validateLessons(form, { quizzes: true });
 
   if (!form.title.trim()) {
     errors.title = "Enter a course title.";
-  }
-  if (!form.organization.trim()) {
-    errors.organization = "Enter an organization.";
   }
   if (!form.identifier.trim()) {
     errors.identifier = "Enter an identifier.";
@@ -43,20 +99,6 @@ export function validateForm(form: PackageForm): Record<string, string> {
   }
   if (!durationOk(form.typicalDuration)) {
     errors.typicalDuration = "Use a duration like PT0H5M0S.";
-  }
-
-  const video = form.videoUrl.trim();
-  if (!video) {
-    errors.videoUrl = "Enter an https video URL.";
-  } else {
-    try {
-      const url = new URL(video);
-      if (url.protocol !== "https:") {
-        errors.videoUrl = "Enter an https video URL.";
-      }
-    } catch {
-      errors.videoUrl = "Enter an https video URL.";
-    }
   }
 
   if (!LANGUAGE.test(form.language.trim())) {

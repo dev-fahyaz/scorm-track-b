@@ -1,0 +1,248 @@
+const crypto = require("crypto");
+const AdmZip = require("adm-zip");
+
+const VERSIONS = new Set(["1.2", "2004 3rd Edition", "2004 4th Edition"]);
+const DURATION = /PT(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?/;
+const ENTRY_LIMIT = 2 * 1024 * 1024;
+
+function fail(message) {
+  return Object.assign(new Error(message), { status: 400, expose: true });
+}
+
+function entryName(entry) {
+  return String(entry.entryName || "").replace(/\\/g, "/");
+}
+
+function findEntry(zip, names) {
+  const wanted = new Set(names);
+  return zip.getEntries().find((entry) => {
+    const name = entryName(entry);
+    if (!name || name.includes("..") || name.startsWith("/")) return false;
+    const base = name.split("/").pop();
+    return wanted.has(base);
+  });
+}
+
+function readEntry(zip, names) {
+  const entry = findEntry(zip, names);
+  if (!entry) return null;
+  if (entry.header.size > ENTRY_LIMIT) {
+    throw fail("A file in the zip is larger than 2 MB.");
+  }
+  return entry.getData();
+}
+
+function section(xml, tag) {
+  const match = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(xml);
+  return match ? match[1] : "";
+}
+
+function blocks(xml, tag) {
+  const found = [];
+  const pattern = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "gi");
+  let match = pattern.exec(xml);
+  while (match) {
+    found.push(match[1]);
+    match = pattern.exec(xml);
+  }
+  return found;
+}
+
+function textValue(block) {
+  const marked = /<!\[CDATA\[([\s\S]*?)\]\]>/.exec(block || "");
+  if (marked) return marked[1].trim();
+  return String(block || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function durationValue(block) {
+  const match = DURATION.exec(block || "");
+  return match && match[0] !== "PT" ? match[0] : "PT0H0M0S";
+}
+
+function vcardField(card, label) {
+  const line = card.split(/\r?\n/).find((entry) => entry.toUpperCase().startsWith(label));
+  if (!line) return "";
+  return line.slice(line.indexOf(":") + 1).trim().replace(/^;+/, "");
+}
+
+function organizationFromManifest(xml) {
+  const match = /<organization\b[^>]*\bidentifier="([^"]+)"/i.exec(xml || "");
+  return match ? match[1].replace(/_/g, " ") : "";
+}
+
+function versionFromManifest(xml) {
+  const match = /<schemaversion>([^<]+)<\/schemaversion>/i.exec(xml || "");
+  const value = match ? match[1].trim() : "";
+  return VERSIONS.has(value) ? value : "";
+}
+
+function readMetadata(xml) {
+  const general = section(xml, "general");
+  const life = section(xml, "lifeCycle");
+  const technical = section(xml, "technical");
+  const educational = section(xml, "educational");
+  const rights = section(xml, "rights");
+  const cardMatch = /BEGIN:VCARD([\s\S]*?)END:VCARD/i.exec(xml || "");
+  const card = cardMatch ? cardMatch[1] : "";
+  const languageMatch = /<language[^>]*>([^<]+)<\/language>/i.exec(general);
+  return {
+    packageName: textValue(section(general, "title")),
+    description: textValue(section(general, "description")),
+    keywords: blocks(general, "keyword").map(textValue).filter(Boolean),
+    language: languageMatch ? languageMatch[1].trim() : "en",
+    packageVersion: textValue(section(life, "version")) || "1.0.0",
+    duration: durationValue(technical),
+    typicalDuration: durationValue(educational),
+    rights: textValue(section(rights, "description")),
+    author: vcardField(card, "FN:"),
+    vcardOrg: vcardField(card, "ORG:"),
+    vcardTel: vcardField(card, "TEL"),
+    vcardAddress: vcardField(card, "ADR"),
+    vcardMail: vcardField(card, "EMAIL"),
+    vcardUrl: vcardField(card, "URL:"),
+  };
+}
+
+function choice(text) {
+  return { id: crypto.randomUUID(), text: String(text || "") };
+}
+
+function formLessons(lessons) {
+  const source = Array.isArray(lessons) ? lessons : [];
+  const groups = source.map((lesson) => {
+    const rawItems = lesson && Array.isArray(lesson.items)
+      ? lesson.items
+      : lesson && (lesson.url || lesson.videoUrl)
+        ? [{ type: "video", title: lesson.title, url: lesson.url || lesson.videoUrl }]
+        : [];
+    const items = rawItems.map((item) => {
+      if (item && item.type === "quiz") {
+        const questions = (Array.isArray(item.questions) ? item.questions : []).map((question) => {
+          const choices = (Array.isArray(question.choices) ? question.choices : []).map(choice);
+          const usable = choices.length >= 2 ? choices : [choice(""), choice("")];
+          const index = Number.isInteger(question.correctIndex) ? question.correctIndex : 0;
+          const correct = usable[index] || usable[0];
+          return {
+            id: crypto.randomUUID(),
+            prompt: String((question && question.prompt) || ""),
+            choices: usable,
+            correctId: correct.id,
+          };
+        });
+        const fallbackChoices = [choice(""), choice("")];
+        return {
+          id: crypto.randomUUID(),
+          type: "quiz",
+          title: String(item.title || ""),
+          questions: questions.length
+            ? questions
+            : [{
+              id: crypto.randomUUID(),
+              prompt: "",
+              choices: fallbackChoices,
+              correctId: fallbackChoices[0].id,
+            }],
+        };
+      }
+      return {
+        id: crypto.randomUUID(),
+        type: "video",
+        title: String((item && item.title) || ""),
+        url: String((item && (item.url || item.videoUrl)) || ""),
+      };
+    });
+    return {
+      id: crypto.randomUUID(),
+      title: String((lesson && lesson.title) || ""),
+      items: items.length ? items : [{ id: crypto.randomUUID(), type: "video", title: "", url: "" }],
+    };
+  });
+  if (!groups.length) {
+    return [{
+      id: crypto.randomUUID(),
+      title: "",
+      items: [{ id: crypto.randomUUID(), type: "video", title: "", url: "" }],
+    }];
+  }
+  return groups;
+}
+
+function posterFromZip(zip, name) {
+  const wanted = name ? [name] : ["poster.jpg", "poster.jpeg", "poster.png", "poster.webp"];
+  const entry = findEntry(zip, wanted);
+  if (!entry) return { posterName: "", posterDataUrl: "" };
+  if (entry.header.size > ENTRY_LIMIT) throw fail("A file in the zip is larger than 2 MB.");
+  const base = entryName(entry).split("/").pop() || "poster.jpg";
+  const ext = base.split(".").pop().toLowerCase();
+  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  return {
+    posterName: base,
+    posterDataUrl: `data:${mime};base64,${entry.getData().toString("base64")}`,
+  };
+}
+
+function importPackage(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
+    throw fail("Choose a zip file.");
+  }
+  let zip;
+  try {
+    zip = new AdmZip(buffer);
+  } catch {
+    throw fail("Choose a zip file.");
+  }
+
+  const configBuffer = readEntry(zip, ["config.json"]);
+  if (!configBuffer) throw fail("This zip was not built by the dashboard.");
+  let config;
+  try {
+    config = JSON.parse(configBuffer.toString("utf8"));
+  } catch {
+    throw fail("The course record in this zip could not be read.");
+  }
+
+  const manifest = (readEntry(zip, ["imsmanifest.xml"]) || Buffer.from("")).toString("utf8");
+  const metadataXml = (readEntry(zip, ["metadata.xml"]) || Buffer.from("")).toString("utf8");
+  const metadata = readMetadata(metadataXml);
+  const poster = posterFromZip(zip, config.poster);
+
+  const version = VERSIONS.has(config.version) ? config.version : versionFromManifest(manifest) || "1.2";
+  const rawThreshold = Number(config.completionThreshold);
+  const threshold = rawThreshold > 0 && rawThreshold <= 1
+    ? Math.round(rawThreshold * 100)
+    : rawThreshold;
+  const completionThreshold = Number.isInteger(threshold) && threshold >= 1 && threshold <= 100
+    ? String(threshold)
+    : "90";
+  const mastery = Number(config.masteryScore);
+  const organization = metadata.vcardOrg || organizationFromManifest(manifest);
+
+  return {
+    version,
+    title: String(config.title || ""),
+    packageName: metadata.packageName || String(config.title || ""),
+    organization,
+    language: metadata.language || "en",
+    identifier: String(config.identifier || ""),
+    packageVersion: metadata.packageVersion || "1.0.0",
+    masteryScore: Number.isFinite(mastery) ? String(mastery) : "80",
+    description: metadata.description,
+    keywords: metadata.keywords.join(", "),
+    author: metadata.author,
+    duration: metadata.duration,
+    typicalDuration: metadata.typicalDuration,
+    rights: metadata.rights,
+    vcardOrg: metadata.vcardOrg,
+    vcardTel: metadata.vcardTel,
+    vcardAddress: metadata.vcardAddress,
+    vcardMail: metadata.vcardMail,
+    vcardUrl: metadata.vcardUrl,
+    lessons: formLessons(config.lessons),
+    note: "",
+    completionThreshold,
+    posterName: poster.posterName,
+    posterDataUrl: poster.posterDataUrl,
+  };
+}
+
+module.exports = { importPackage };

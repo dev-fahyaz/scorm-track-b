@@ -1,4 +1,51 @@
-import type { PackageRequest } from "./types";
+import type { DraftResult, PackageForm, PackageRequest } from "./types";
+
+async function readError(response: Response, fallback: string): Promise<never> {
+  let message = fallback;
+  try {
+    const data = (await response.json()) as { error?: string };
+    if (data.error) message = data.error;
+  } catch {
+    // The body was not JSON.
+  }
+  throw new Error(message);
+}
+
+export async function draftCourse(body: PackageRequest): Promise<DraftResult> {
+  const response = await fetch("/api/draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      version: body.version,
+      organization: body.organization,
+      note: body.note,
+      lessons: body.lessons.map((lesson) => ({
+        title: lesson.title,
+        items: lesson.items.map((item) =>
+          item.type === "quiz"
+            ? { type: "quiz", title: item.title }
+            : { type: "video", title: item.title, url: item.url }
+        ),
+      })),
+    }),
+  });
+  if (!response.ok) {
+    return readError(response, `Draft failed (${response.status}).`);
+  }
+  return (await response.json()) as DraftResult;
+}
+
+export async function importPackage(file: File): Promise<PackageForm> {
+  const response = await fetch("/api/imports", {
+    method: "POST",
+    headers: { "Content-Type": "application/zip" },
+    body: file,
+  });
+  if (!response.ok) {
+    return readError(response, `Open failed (${response.status}).`);
+  }
+  return (await response.json()) as PackageForm;
+}
 
 export async function buildPackage(
   body: PackageRequest
@@ -10,14 +57,7 @@ export async function buildPackage(
   });
 
   if (!response.ok) {
-    let message = `Build failed (${response.status}).`;
-    try {
-      const data = (await response.json()) as { error?: string };
-      if (data.error) message = data.error;
-    } catch {
-      // The body was not JSON.
-    }
-    throw new Error(message);
+    return readError(response, `Build failed (${response.status}).`);
   }
 
   const header = response.headers.get("Content-Disposition") || "";

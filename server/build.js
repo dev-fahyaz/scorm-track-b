@@ -15,6 +15,100 @@ function durationOk(value) {
   return typeof value === "string" && value.trim() !== "PT" && DURATION.test(value.trim());
 }
 
+function httpsUrl(value) {
+  try {
+    return Boolean(value) && new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function lessonErrors(lessons, options) {
+  const checkQuizzes = Boolean(options && options.quizzes);
+  const errors = [];
+  if (!Array.isArray(lessons) || lessons.length === 0) {
+    errors.push("Add at least one lesson.");
+    return errors;
+  }
+  lessons.forEach((lesson, lessonIndex) => {
+    const items = lesson && Array.isArray(lesson.items) ? lesson.items : null;
+    const label = `Lesson ${lessonIndex + 1}`;
+    if (!items || items.length === 0) {
+      errors.push(`${label} needs a video or a quiz.`);
+      return;
+    }
+    items.forEach((item, itemIndex) => {
+      const kind = item && item.type === "quiz" ? "quiz" : "video";
+      const itemLabel = `${label} ${kind} ${itemIndex + 1}`;
+      if (kind === "video") {
+        const url = item && typeof (item.url || item.videoUrl) === "string"
+          ? String(item.url || item.videoUrl).trim()
+          : "";
+        if (!httpsUrl(url)) {
+          errors.push(`${itemLabel} needs an https file URL or a YouTube link.`);
+        }
+        return;
+      }
+      if (!checkQuizzes) return;
+      const questions = item && Array.isArray(item.questions) ? item.questions : [];
+      if (!questions.length || questions.length > 20) {
+        errors.push(`${itemLabel} needs between 1 and 20 questions.`);
+        return;
+      }
+      questions.forEach((question, questionIndex) => {
+        const prompt = question && typeof question.prompt === "string" ? question.prompt.trim() : "";
+        if (!prompt) errors.push(`${itemLabel} question ${questionIndex + 1} needs a prompt.`);
+        const choices = question && Array.isArray(question.choices)
+          ? question.choices.map((choice) => String(choice || "").trim())
+          : [];
+        if (choices.length < 2 || choices.length > 6 || choices.some((choice) => !choice)) {
+          errors.push(`${itemLabel} question ${questionIndex + 1} needs 2 to 6 choices.`);
+        }
+        const correct = question ? question.correctIndex : -1;
+        if (!Number.isInteger(correct) || correct < 0 || correct >= choices.filter(Boolean).length) {
+          errors.push(`${itemLabel} question ${questionIndex + 1} needs one correct choice.`);
+        }
+      });
+    });
+  });
+  return errors;
+}
+
+function itemHref(lessonNumber, itemNumber, count) {
+  if (count <= 1) return `lesson-${lessonNumber}.html`;
+  return `lesson-${lessonNumber}-${itemNumber}.html`;
+}
+
+function normalizeLessons(lessons) {
+  return lessons.map((lesson, lessonIndex) => {
+    const sourceItems = Array.isArray(lesson.items) ? lesson.items : [];
+    const items = sourceItems.map((item, itemIndex) => {
+      const type = item && item.type === "quiz" ? "quiz" : "video";
+      const href = itemHref(lessonIndex + 1, itemIndex + 1, sourceItems.length);
+      const fallback = type === "quiz" ? `Quiz ${itemIndex + 1}` : `Video ${itemIndex + 1}`;
+      const title = (item && String(item.title || "").trim()) || fallback;
+      if (type === "quiz") {
+        const questions = (item.questions || []).map((question) => ({
+          prompt: String(question.prompt || "").trim(),
+          choices: (question.choices || []).map((choice) => String(choice || "").trim()),
+          correctIndex: question.correctIndex,
+        }));
+        return { type, title, href, questions };
+      }
+      return {
+        type,
+        title,
+        href,
+        url: String((item && (item.url || item.videoUrl)) || "").trim(),
+      };
+    });
+    return {
+      title: (lesson && String(lesson.title || "").trim()) || `Lesson ${lessonIndex + 1}`,
+      items,
+    };
+  });
+}
+
 function validate(body) {
   const errors = [];
   if (!body || typeof body !== "object") return ["Send a course record."];
@@ -36,15 +130,7 @@ function validate(body) {
   if (typeof body.masteryScore !== "number" || body.masteryScore < 0 || body.masteryScore > 100) {
     errors.push("Enter a mastery score from 0 to 100.");
   }
-  if (body.startingPage !== "index.html") errors.push("The launch file is index.html.");
-
-  let video;
-  try {
-    video = new URL(body.videoUrl);
-  } catch {
-    video = null;
-  }
-  if (!video || video.protocol !== "https:") errors.push("Enter an https video URL.");
+  errors.push(...lessonErrors(body.lessons, { quizzes: true }));
 
   if (
     typeof body.completionThreshold !== "number" ||
@@ -95,19 +181,30 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-function courseHtml(title) {
+function courseHtml(title, lessonIndex, itemIndex) {
   const safe = escapeHtml(title);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
   <title>${safe}</title>
   <style>
     body { margin: 0; background: #14181f; color: #f6f3ec; font-family: Georgia, "Iowan Old Style", serif; }
     main { max-width: 960px; margin: 0 auto; padding: 28px 16px 48px; }
     h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 14px; }
     video { width: 100%; background: #000; border-radius: 10px; }
+    video.off, #youtube-frame, #quiz { display: none; }
+    #youtube-frame.on { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; }
+    #youtube-frame iframe { width: 100%; height: 100%; border: 0; }
+    #quiz.on { display: block; font-family: "Segoe UI", sans-serif; }
+    #quiz h2 { font-family: Georgia, "Iowan Old Style", serif; font-size: 1.25rem; margin: 0 0 16px; }
+    #quiz fieldset { border: 1px solid #3a4250; border-radius: 10px; margin: 0 0 14px; padding: 12px 14px; }
+    #quiz legend { padding: 0 6px; }
+    #quiz label { display: block; margin: 8px 0; }
+    #quiz button { margin-top: 8px; border: 0; border-radius: 999px; padding: 10px 16px; background: #f6f3ec; color: #14181f; font-weight: 700; cursor: pointer; }
+    #quiz button:disabled { opacity: 0.6; cursor: default; }
     #status { font-family: "Segoe UI", sans-serif; color: #d5d0c6; font-size: 0.92rem; }
   </style>
 </head>
@@ -115,8 +212,11 @@ function courseHtml(title) {
   <main>
     <h1>${safe}</h1>
     <video id="lesson" controls playsinline preload="metadata"></video>
+    <div id="youtube-frame"><div id="youtube"></div></div>
+    <div id="quiz"></div>
     <p id="status">Loading lesson…</p>
   </main>
+  <script>window.LESSON_INDEX = ${Number(lessonIndex)};window.ITEM_INDEX = ${Number(itemIndex)};</script>
   <script src="player.js"></script>
 </body>
 </html>
@@ -160,9 +260,20 @@ async function buildCourse(body, playerFile) {
   const outputFolder = path.join(root, "out");
 
   try {
+    const lessons = normalizeLessons(body.lessons);
     await fse.ensureDir(source);
     await fse.copy(playerFile, path.join(source, "player.js"));
-    await fse.writeFile(path.join(source, "index.html"), courseHtml(body.title.trim()), "utf8");
+    for (let lessonIndex = 0; lessonIndex < lessons.length; lessonIndex += 1) {
+      const items = lessons[lessonIndex].items;
+      for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+        const item = items[itemIndex];
+        await fse.writeFile(
+          path.join(source, item.href),
+          courseHtml(item.title, lessonIndex, itemIndex),
+          "utf8"
+        );
+      }
+    }
 
     let poster = null;
     if (body.posterDataUrl) {
@@ -187,7 +298,15 @@ async function buildCourse(body, playerFile) {
       title: body.title.trim(),
       identifier: body.identifier.trim(),
       masteryScore: body.masteryScore,
-      startingPage: "index.html",
+      startingPage: lessons[0].items[0].href,
+      lessons: lessons.map((lesson) => ({
+        title: lesson.title,
+        items: lesson.items.map((item) => ({
+          title: item.title,
+          href: item.href,
+          type: item.type,
+        })),
+      })),
       source,
       package: {
         name: (pkg.name && String(pkg.name).trim()) || body.title.trim(),
@@ -218,7 +337,7 @@ async function buildCourse(body, playerFile) {
       title: config.title,
       identifier: config.identifier,
       version: config.version,
-      videoUrl: body.videoUrl.trim(),
+      lessons,
       completionThreshold: body.completionThreshold / 100,
       masteryScore: body.masteryScore,
       poster,
@@ -239,4 +358,4 @@ async function buildCourse(body, playerFile) {
   }
 }
 
-module.exports = { buildCourse, validate };
+module.exports = { buildCourse, validate, lessonErrors, normalizeLessons };

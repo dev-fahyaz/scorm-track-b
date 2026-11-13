@@ -1,6 +1,6 @@
 `version 0.2.7`
 
-Track B SCORM export. A React dashboard collects the course record and the existing packager writes `imsmanifest.xml`, `metadata.xml`, and a zip an LMS can import. Track A stays the player: the lesson inside the zip finds `window.API` or `window.API_1484_11` and reports progress there.
+Track B SCORM export. A React dashboard collects the course record and the existing packager writes `imsmanifest.xml`, `metadata.xml`, and a zip an LMS can import. Track A stays the player: each lesson inside the zip finds `window.API` or `window.API_1484_11` and reports progress there.
 
 Supported SCORM versions:
 
@@ -22,22 +22,21 @@ Open http://localhost:5173/. The API listens on port 3001, and Vite proxies `/ap
 
 `npm start` runs only the API.
 
-The form has four sections:
+Copy `.env.example` to `.env` and set `OPENROUTER_API_KEY`. Drafts use OpenRouter auto unless `OPENROUTER_MODEL` is set. The key stays on the API. It is not sent to the browser.
 
-* **Identity.** SCORM version, course title, package name, organization, language, identifier, and package version.
-* **Course structure.** One organization and one lesson. The launch file is `index.html`. Mastery score is 0–100.
-* **Metadata.** Description, keywords, author, duration (`PT#H#M#S`), rights, and contact details. These are written to `metadata.xml`.
-* **Lesson.** An https video URL, a completion threshold (default 90% watched), and an optional poster. The MP4 is not copied into the zip.
+The form starts with lessons and the organization. Each lesson can hold videos and quizzes. A video is an https file URL or a YouTube link. An optional note tells the draft what the course is about. Titles, the description, keywords, durations, rights, the identifier, and the mastery score can be left blank. **Open zip** refills the form from a zip this dashboard built.
 
-**Build SCORM zip** downloads `{name}_v{version}_{date}.zip`. The zip root contains:
+**Draft course** fills those fields from OpenRouter. It uses the video URLs and the note. It does not invent quiz questions. The fields stay editable. **Build SCORM zip** uses the form as it stands, and drafts first when the title, identifier, or description is still empty.
+
+A lesson with one sub-lesson stays one launch file (`lesson-1.html`). A lesson with more than one becomes a folder, and each video or quiz is its own file (`lesson-1-1.html`, `lesson-1-2.html`). The manifest has no sequencing rules. The zip root contains:
 
 * `imsmanifest.xml`
 * `metadata.xml`
-* `index.html`, `player.js`, and `config.json`
+* one html file per video or quiz, plus shared `player.js` and `config.json`
 * the poster, when one was provided
 * the XSD or DTD files for the selected edition
 
-`player.js` is the SCO. It walks parent frames for the SCORM API, resumes from the bookmark, stores a short watched-segment bitmap in suspend data, and commits about every 15 seconds and on exit. Completion is set when the watched fraction reaches the threshold.
+`player.js` walks parent frames for the SCORM API. A file URL plays in the video element. A YouTube link plays through the YouTube IFrame API on youtube.com, with the page origin sent to the player. Both resume from the bookmark, store a short watched-segment bitmap in suspend data, and commit about every 15 seconds and on exit. Completion is set when the watched fraction reaches the threshold. If the YouTube API cannot load, the page says playback could not be tracked. If the owner has disabled embedding, the page says so. A quiz scores correct answers out of 100, marks success when the score meets the mastery score, and marks the item complete on submit.
 
 ## Library
 

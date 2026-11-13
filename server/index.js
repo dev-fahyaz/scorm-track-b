@@ -2,7 +2,12 @@ const path = require("path");
 const fs = require("fs");
 const esbuild = require("esbuild");
 const express = require("express");
+const { loadEnv } = require("./env");
 const { buildCourse } = require("./build");
+const { draftCourse } = require("./draft");
+const { importPackage } = require("./import");
+
+loadEnv();
 
 const playerFile = path.join(__dirname, "..", "sco", "dist", "player.js");
 
@@ -23,6 +28,36 @@ bundlePlayer();
 
 const app = express();
 app.use(express.json({ limit: "8mb" }));
+
+app.post("/api/draft", async (req, res) => {
+  try {
+    const result = await draftCourse(req.body || {});
+    res.json(result);
+  } catch (error) {
+    const status = error.status || 500;
+    const message = error.expose ? error.message : "The draft could not be created.";
+    if (!error.expose) console.error(error);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.post(
+  "/api/imports",
+  express.raw({
+    type: ["application/zip", "application/octet-stream", "application/x-zip-compressed"],
+    limit: "20mb",
+  }),
+  (req, res) => {
+    try {
+      res.json(importPackage(req.body));
+    } catch (error) {
+      const status = error.status || 500;
+      const message = error.expose ? error.message : "The zip could not be opened.";
+      if (!error.expose) console.error(error);
+      res.status(status).json({ error: message });
+    }
+  }
+);
 
 app.post("/api/packages", async (req, res) => {
   try {
