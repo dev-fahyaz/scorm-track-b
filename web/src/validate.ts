@@ -1,4 +1,4 @@
-import type { PackageForm } from "./types";
+import type { PackageForm, QuizQuestion } from "./types";
 
 const DURATION = /^PT(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?$/;
 const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
@@ -26,6 +26,44 @@ function httpsUrl(value: string): boolean {
   }
 }
 
+function questionErrors(
+  question: QuizQuestion,
+  key: string,
+  label: string,
+  withTime: boolean,
+  errors: Record<string, string>
+): void {
+  if (!question.prompt.trim()) {
+    errors[`quiz-prompt-${key}`] = `Enter ${label}.`;
+  }
+  if (withTime && question.at === "invalid") {
+    errors[`quiz-time-${key}`] = "Enter minutes and seconds, or leave both blank.";
+  }
+  if (question.kind === "fill-in") {
+    const answers = question.answers.map((answer) => answer.trim()).filter(Boolean);
+    if (!answers.length || answers.length > 6 || answers.length !== question.answers.length) {
+      errors[`quiz-answers-${key}`] = "Enter 1 to 6 accepted answers.";
+    }
+    return;
+  }
+  if (question.kind === "true-false") {
+    if (question.correctIds.length !== 1) {
+      errors[`quiz-correct-${key}`] = "Choose true or false.";
+    }
+    return;
+  }
+  const filled = question.choices.filter((choice) => choice.text.trim());
+  if (question.choices.length < 2 || question.choices.length > 6 || filled.length !== question.choices.length) {
+    errors[`quiz-choices-${key}`] = "Enter 2 to 6 choices.";
+  }
+  const marked = question.choices.filter((choice) => question.correctIds.includes(choice.id) && choice.text.trim());
+  if (question.kind === "multi") {
+    if (!marked.length) errors[`quiz-correct-${key}`] = "Mark at least one correct choice.";
+    return;
+  }
+  if (marked.length !== 1) errors[`quiz-correct-${key}`] = "Mark one correct choice.";
+}
+
 export function validateLessons(
   form: PackageForm,
   options?: { quizzes?: boolean }
@@ -48,25 +86,24 @@ export function validateLessons(
         if (!url || !httpsUrl(url)) {
           errors[`item-url-${lessonIndex}-${itemIndex}`] = "Enter an https file URL or a YouTube link.";
         }
-        return;
       }
       if (!options?.quizzes) return;
-      if (!item.questions.length) {
+      if (item.type === "quiz" && !item.questions.length) {
         errors[`quiz-${lessonIndex}-${itemIndex}`] = "Add a question.";
         return;
       }
+      if (item.questions.length > 20) {
+        errors[`quiz-${lessonIndex}-${itemIndex}`] = "Use 20 questions or fewer.";
+        return;
+      }
       item.questions.forEach((question, questionIndex) => {
-        const key = `${lessonIndex}-${itemIndex}-${questionIndex}`;
-        if (!question.prompt.trim()) {
-          errors[`quiz-prompt-${key}`] = "Enter a question.";
-        }
-        const filled = question.choices.filter((choice) => choice.text.trim());
-        if (question.choices.length < 2 || question.choices.length > 6 || filled.length !== question.choices.length) {
-          errors[`quiz-choices-${key}`] = "Enter 2 to 6 choices.";
-        }
-        if (!question.choices.some((choice) => choice.id === question.correctId && choice.text.trim())) {
-          errors[`quiz-correct-${key}`] = "Mark one correct choice.";
-        }
+        questionErrors(
+          question,
+          `${lessonIndex}-${itemIndex}-${questionIndex}`,
+          "a question",
+          item.type === "video",
+          errors
+        );
       });
     });
   });

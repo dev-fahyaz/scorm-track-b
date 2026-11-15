@@ -4,6 +4,8 @@ interface YouTubePlayer {
   getCurrentTime(): number;
   getDuration(): number;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
+  pauseVideo(): void;
+  playVideo(): void;
   destroy(): void;
 }
 
@@ -18,7 +20,7 @@ interface YouTubeNamespace {
       onError?: (event: { data: number }) => void;
     };
   }) => YouTubePlayer;
-  PlayerState?: { ENDED: number };
+  PlayerState?: { ENDED: number; PLAYING: number };
 }
 
 declare global {
@@ -83,6 +85,9 @@ function loadApi(): Promise<void> {
 
 export interface YouTubeHandle {
   ok: boolean;
+  pause(): void;
+  play(): void;
+  seek(seconds: number): void;
   stop(): void;
 }
 
@@ -92,18 +97,19 @@ export async function mountYouTube(options: {
   resume: number;
   onTime: (current: number, duration: number) => void;
   onEnded: () => void;
+  onPlay?: () => void;
   onError: (message: string) => void;
 }): Promise<YouTubeHandle> {
   try {
     await loadApi();
   } catch {
     options.onError("YouTube could not be loaded, so playback could not be tracked.");
-    return { ok: false, stop() {} };
+    return { ok: false, pause() {}, play() {}, seek() {}, stop() {} };
   }
   const yt = window.YT;
   if (!yt) {
     options.onError("YouTube could not be loaded, so playback could not be tracked.");
-    return { ok: false, stop() {} };
+    return { ok: false, pause() {}, play() {}, seek() {}, stop() {} };
   }
 
   let player: YouTubePlayer | null = null;
@@ -140,7 +146,9 @@ export async function mountYouTube(options: {
       },
       onStateChange: (event) => {
         const ended = yt.PlayerState ? yt.PlayerState.ENDED : 0;
+        const playing = yt.PlayerState ? yt.PlayerState.PLAYING : 1;
         if (event.data === ended) options.onEnded();
+        if (event.data === playing) options.onPlay?.();
       },
       onError: (event) => {
         const code = event && event.data;
@@ -155,6 +163,27 @@ export async function mountYouTube(options: {
 
   return {
     ok: true,
+    pause() {
+      try {
+        player?.pauseVideo();
+      } catch {
+        // The player is not ready.
+      }
+    },
+    play() {
+      try {
+        player?.playVideo();
+      } catch {
+        // The player is not ready.
+      }
+    },
+    seek(seconds: number) {
+      try {
+        player?.seekTo(seconds, true);
+      } catch {
+        // Seeking before the stream is ready is ignored.
+      }
+    },
     stop() {
       window.clearInterval(timer);
       try {

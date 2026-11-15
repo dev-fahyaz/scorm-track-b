@@ -32,8 +32,17 @@ export interface ScormAdapter {
   setSuccess(passed: boolean | null): void;
   setScore(raw: number, min: number, max: number): void;
   setSessionTime(seconds: number): void;
+  setInteractions(records: InteractionRecord[]): void;
   commit(): boolean;
   terminate(): boolean;
+}
+
+export interface InteractionRecord {
+  id: string;
+  type: "true-false" | "choice" | "fill-in";
+  response: string;
+  correct: string[];
+  result: "correct" | "wrong";
 }
 
 export function accepted(result: string | boolean): boolean {

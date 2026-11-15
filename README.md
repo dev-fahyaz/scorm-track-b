@@ -36,7 +36,9 @@ A lesson with one sub-lesson stays one launch file (`lesson-1.html`). A lesson w
 * the poster, when one was provided
 * the XSD or DTD files for the selected edition
 
-`player.js` walks parent frames for the SCORM API. A file URL plays in the video element. A YouTube link plays through the YouTube IFrame API on youtube.com, with the page origin sent to the player. Both resume from the bookmark, store a short watched-segment bitmap in suspend data, and commit about every 15 seconds and on exit. Completion is set when the watched fraction reaches the threshold. If the YouTube API cannot load, the page says playback could not be tracked. If the owner has disabled embedding, the page says so. A quiz scores correct answers out of 100, marks success when the score meets the mastery score, and marks the item complete on submit.
+`player.js` walks parent frames for the SCORM API. A file URL plays in the video element. A YouTube link plays through the YouTube IFrame API on youtube.com, with the page origin sent to the player. Both resume from the bookmark, store a short watched-segment bitmap in suspend data, and commit about every 15 seconds and on exit. Completion is set when the watched fraction reaches the threshold. If the YouTube API cannot load, the page says playback could not be tracked. If the owner has disabled embedding, the page says so.
+
+A question is single choice, true/false, multiple answers, or a short fill-in. It can sit on a video at a minute-and-second mark, or after the video ends, or in its own quiz launch file. Reaching an unanswered checkpoint pauses the video there. The score is correct answers out of 100. Each answer is also written to `cmi.interactions`. When **A failed quiz blocks completion** is on, the item stays incomplete until the watch threshold is met and the score reaches the mastery score. When it is off, the watch threshold still completes a video, and the quiz still reports the score and pass or fail. A failed gated quiz can be retried. Answered checkpoints are kept in suspend data, so reopening the lesson does not ask them again.
 
 ## Library
 

@@ -1,5 +1,5 @@
-import { mountQuiz, type QuizQuestion } from "./quiz";
-import { findApi, type ScormAdapter } from "./runtime";
+import { createCheckpointSession, mountQuiz, readQuestions, type CheckpointSession } from "./quiz";
+import { findApi, type InteractionRecord, type ScormAdapter } from "./runtime";
 import { Scorm12Adapter } from "./scorm12";
 import { Scorm2004Adapter } from "./scorm2004";
 import {
@@ -17,7 +17,7 @@ interface CourseItem {
   url?: string;
   videoUrl?: string;
   href?: string;
-  questions?: QuizQuestion[];
+  questions?: unknown;
 }
 
 interface CourseLesson {
@@ -35,6 +35,7 @@ interface CourseConfig {
   videoUrl?: string;
   completionThreshold: number;
   masteryScore: number;
+  requireQuizPass?: boolean;
   poster: string | null;
 }
 
@@ -87,6 +88,14 @@ function startWatch(options: {
   threshold: number;
   position: () => { current: number; duration: number };
   hold?: { message: string };
+  quiz?: {
+    active: boolean;
+    requirePass: boolean;
+    mastery: number;
+    marks: () => string;
+    outcome: () => { score: number | null; passed: boolean | null };
+    interactions: () => InteractionRecord[];
+  };
 }): {
   note: (current: number, duration: number) => void;
   report: (finish: boolean) => void;
@@ -119,19 +128,35 @@ function startWatch(options: {
     const reached = fraction + 1e-9 >= options.threshold;
     const percent = Math.round(fraction * 100);
     const { current } = options.position();
+    const quiz = options.quiz?.active ? options.quiz : null;
+    const result = quiz ? quiz.outcome() : { score: null, passed: null };
+    const apiName = options.kind === "2004" ? "SCORM 2004" : "SCORM 1.2";
     if (!options.adapter) {
-      setStatus(`SCORM API not found. Watched ${percent}%${reached ? ". Threshold reached." : "."}`);
+      if (quiz && result.score != null) {
+        setStatus(`SCORM API not found. Score ${result.score}.`);
+      } else {
+        setStatus(`SCORM API not found. Watched ${percent}%${reached ? ". Threshold reached." : "."}`);
+      }
       return;
     }
     if (current > 0.05) options.adapter.setBookmark(current.toFixed(2));
     const stored = Number(options.adapter.getBookmark());
     const suspendAt = current > 0 ? current : Number.isFinite(stored) ? stored : bookmark;
-    options.adapter.setSuspendData(encodeSuspend(suspendAt, bits));
+    options.adapter.setSuspendData(encodeSuspend(suspendAt, bits, quiz ? quiz.marks() : ""));
     options.adapter.setProgress(fraction);
-    options.adapter.setScore(percent, 0, 100);
     options.adapter.setSessionTime((Date.now() - options.sessionStart) / 1000);
-    options.adapter.setCompletion(reached);
-    options.adapter.setSuccess(reached ? true : null);
+    if (quiz) {
+      if (result.score != null) options.adapter.setScore(result.score, 0, 100);
+      const records = quiz.interactions();
+      if (records.length) options.adapter.setInteractions(records);
+      const complete = quiz.requirePass ? Boolean(reached && result.passed) : reached;
+      options.adapter.setCompletion(complete);
+      options.adapter.setSuccess(result.passed);
+    } else {
+      options.adapter.setScore(percent, 0, 100);
+      options.adapter.setCompletion(reached);
+      options.adapter.setSuccess(reached ? true : null);
+    }
     if (finish) {
       if (!stopped) {
         stopped = true;
@@ -140,8 +165,21 @@ function startWatch(options: {
     } else {
       options.adapter.commit();
     }
-    const apiName = options.kind === "2004" ? "SCORM 2004" : "SCORM 1.2";
-    setStatus(reached ? `Completed. Reported to ${apiName}.` : `Watched ${percent}%. Reporting to ${apiName}.`);
+    if (quiz && result.passed === false && quiz.requirePass) {
+      setStatus(`Score ${result.score}. Mastery is ${quiz.mastery}. The item stays incomplete.`);
+    } else if (quiz && result.score != null && result.passed && reached) {
+      setStatus(`Passed with ${result.score}. Reported to ${apiName}.`);
+    } else if (quiz && result.score != null && !quiz.requirePass && reached) {
+      setStatus(`Score ${result.score}. Reported to ${apiName}.`);
+    } else if (quiz && reached && quiz.requirePass) {
+      setStatus(`Watched ${percent}%. Answer the questions to complete.`);
+    } else if (quiz && reached) {
+      setStatus(`Completed. Reported to ${apiName}.`);
+    } else if (quiz) {
+      setStatus(`Watched ${percent}%. Reporting to ${apiName}.`);
+    } else {
+      setStatus(reached ? `Completed. Reported to ${apiName}.` : `Watched ${percent}%. Reporting to ${apiName}.`);
+    }
   };
 
   const note = (current: number, duration: number) => {
@@ -207,10 +245,14 @@ async function main(): Promise<void> {
   const sessionStart = Date.now();
   const item = resolved.item;
 
+  const mastery = Number(config.masteryScore);
+  const requirePass = config.requireQuizPass !== false;
+  const apiName = connected?.kind === "2004" ? "SCORM 2004" : "SCORM 1.2";
+
   if (item.type === "quiz") {
     video.classList.add("off");
     quizRoot.classList.add("on");
-    const questions = Array.isArray(item.questions) ? item.questions : [];
+    const questions = readQuestions(item.questions, false);
     if (!questions.length) {
       setStatus("This quiz has no questions.");
       return;
@@ -221,26 +263,38 @@ async function main(): Promise<void> {
       adapter.terminate();
     };
     window.addEventListener("pagehide", finish);
-    mountQuiz(quizRoot, resolved.title, questions, (score) => {
-      const mastery = Number(config.masteryScore);
-      const passed = score >= mastery;
-      if (!adapter) {
-        setStatus(`SCORM API not found. Score ${score}.`);
-        return;
-      }
-      adapter.setScore(score, 0, 100);
-      adapter.setProgress(score / 100);
-      adapter.setSuccess(passed);
-      adapter.setCompletion(true);
-      adapter.setSessionTime((Date.now() - sessionStart) / 1000);
-      adapter.commit();
-      const apiName = connected?.kind === "2004" ? "SCORM 2004" : "SCORM 1.2";
-      setStatus(
-        passed
-          ? `Passed with ${score}. Reported to ${apiName}.`
-          : `Score ${score}. Mastery is ${mastery}. Reported to ${apiName}.`
-      );
-    });
+    const present = () => {
+      mountQuiz(quizRoot, resolved.title, questions, (result) => {
+        const passed = result.score >= mastery;
+        const complete = !requirePass || passed;
+        if (!adapter) {
+          setStatus(`SCORM API not found. Score ${result.score}.`);
+        } else {
+          adapter.setScore(result.score, 0, 100);
+          adapter.setProgress(result.score / 100);
+          adapter.setInteractions(result.interactions);
+          adapter.setSuccess(passed);
+          adapter.setCompletion(complete);
+          adapter.setSessionTime((Date.now() - sessionStart) / 1000);
+          adapter.commit();
+          setStatus(
+            passed
+              ? `Passed with ${result.score}. Reported to ${apiName}.`
+              : complete
+                ? `Score ${result.score}. Mastery is ${mastery}. Reported to ${apiName}.`
+                : `Score ${result.score}. Mastery is ${mastery}. The item stays incomplete.`
+          );
+        }
+        if (!complete) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "Retry quiz";
+          button.addEventListener("click", () => present());
+          quizRoot.append(button);
+        }
+      });
+    };
+    present();
     return;
   }
 
@@ -251,9 +305,51 @@ async function main(): Promise<void> {
   }
 
   const threshold = Number(config.completionThreshold);
+  const questions = readQuestions(item.questions, true);
   let currentTime = 0;
   let duration = 0;
   const position = () => ({ current: currentTime, duration });
+  const savedMarks = adapter ? decodeSuspend(adapter.getSuspendData())?.marks || "" : "";
+  let reportWatch: (finish: boolean) => void = () => {};
+  let handle: YouTubeHandle | null = null;
+  const media = {
+    pause() {
+      if (handle) handle.pause();
+      else video.pause();
+    },
+    play() {
+      if (handle) handle.play();
+      else void video.play();
+    },
+    seek(seconds: number) {
+      if (handle) handle.seek(seconds);
+      else video.currentTime = seconds;
+    },
+  };
+  const checkpoints: CheckpointSession | null = questions.length
+    ? createCheckpointSession({
+      questions,
+      savedMarks,
+      root: quizRoot,
+      mastery,
+      requirePass,
+      media,
+      onChange() {
+        reportWatch(false);
+      },
+    })
+    : null;
+  const quiz = checkpoints
+    ? {
+      active: true,
+      requirePass,
+      mastery,
+      marks: () => checkpoints.marks(),
+      outcome: () => checkpoints.outcome(),
+      interactions: () => checkpoints.interactions(),
+    }
+    : undefined;
+  checkpoints?.resume();
 
   const videoId = youtubeId(url);
   if (videoId) {
@@ -267,8 +363,9 @@ async function main(): Promise<void> {
       threshold,
       position,
       hold,
+      quiz,
     });
-    let handle: YouTubeHandle | null = null;
+    reportWatch = watch.report;
     try {
       handle = await mountYouTube({
         elementId: "youtube",
@@ -278,11 +375,16 @@ async function main(): Promise<void> {
           currentTime = current;
           duration = length;
           watch.note(current, length);
+          checkpoints?.onTime(current, length);
         },
         onEnded: () => {
           currentTime = Math.max(0, duration - 0.01);
           watch.note(currentTime, duration);
+          checkpoints?.onEnded();
           watch.report(false);
+        },
+        onPlay: () => {
+          if (checkpoints?.isLocked()) handle?.pause();
         },
         onError: (message) => {
           hold.message = message;
@@ -305,7 +407,9 @@ async function main(): Promise<void> {
     sessionStart,
     threshold,
     position,
+    quiz,
   });
+  reportWatch = watch.report;
   const seek = () => {
     if (watch.bookmark > 0) {
       video.currentTime = Math.min(
@@ -318,15 +422,23 @@ async function main(): Promise<void> {
   if (video.readyState >= 1) seek();
   else video.addEventListener("loadedmetadata", seek);
 
+  video.addEventListener("play", () => {
+    if (checkpoints?.isLocked()) video.pause();
+  });
+  video.addEventListener("seeking", () => {
+    checkpoints?.onTime(video.currentTime, video.duration || 0);
+  });
   video.addEventListener("timeupdate", () => {
     currentTime = video.currentTime;
     duration = video.duration;
     watch.note(currentTime, duration);
+    checkpoints?.onTime(currentTime, duration);
   });
   video.addEventListener("ended", () => {
     currentTime = Math.max(0, video.duration - 0.01);
     duration = video.duration;
     watch.note(currentTime, duration);
+    checkpoints?.onEnded();
     watch.report(false);
   });
   video.addEventListener("error", () => {

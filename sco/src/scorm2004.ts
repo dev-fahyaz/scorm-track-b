@@ -1,4 +1,4 @@
-import type { Scorm2004Runtime, ScormAdapter } from "./runtime";
+import type { InteractionRecord, Scorm2004Runtime, ScormAdapter } from "./runtime";
 import { accepted } from "./runtime";
 import { formatScorm2004 } from "./time";
 
@@ -77,6 +77,25 @@ export class Scorm2004Adapter implements ScormAdapter {
 
   setSessionTime(seconds: number): void {
     this.api.SetValue("cmi.session_time", formatScorm2004(seconds));
+  }
+
+  setInteractions(records: InteractionRecord[]): void {
+    records.forEach((record, index) => {
+      const base = `cmi.interactions.${index}`;
+      const response = record.type === "choice"
+        ? record.response.split(",").filter(Boolean).join("[,]")
+        : record.response.slice(0, 1000);
+      const patterns = record.type === "choice"
+        ? record.correct.map((pattern) => pattern.split(",").filter(Boolean).join("[,]"))
+        : record.correct.map((pattern) => pattern.slice(0, 1000));
+      this.api.SetValue(`${base}.id`, record.id.slice(0, 4000));
+      this.api.SetValue(`${base}.type`, record.type);
+      this.api.SetValue(`${base}.learner_response`, response);
+      this.api.SetValue(`${base}.result`, record.result);
+      patterns.forEach((pattern, patternIndex) => {
+        this.api.SetValue(`${base}.correct_responses.${patternIndex}.pattern`, pattern);
+      });
+    });
   }
 
   commit(): boolean {

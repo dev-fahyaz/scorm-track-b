@@ -107,6 +107,75 @@ function choice(text) {
   return { id: crypto.randomUUID(), text: String(text || "") };
 }
 
+function questionKind(question) {
+  const kind = question && question.kind;
+  if (kind === "choice" || kind === "true-false" || kind === "multi" || kind === "fill-in") return kind;
+  return "choice";
+}
+
+function timeField(question, withTime) {
+  if (!withTime) return "";
+  return question && Number.isInteger(question.at) && question.at >= 0 ? String(question.at) : "";
+}
+
+function correctIndexes(question) {
+  if (question && Array.isArray(question.correctIndexes)) return question.correctIndexes;
+  if (question && Number.isInteger(question.correctIndex)) return [question.correctIndex];
+  return [];
+}
+
+function formQuestion(question, withTime) {
+  const kind = questionKind(question);
+  const prompt = String((question && question.prompt) || "");
+  const at = timeField(question, withTime);
+  if (kind === "fill-in") {
+    const source = question && Array.isArray(question.answers) ? question.answers : [];
+    const answers = source.length ? source.map((answer) => String(answer || "")) : [""];
+    return {
+      id: crypto.randomUUID(),
+      kind,
+      prompt,
+      choices: [],
+      correctIds: [],
+      answers,
+      at,
+    };
+  }
+  if (kind === "true-false") {
+    const yes = choice("True");
+    const no = choice("False");
+    const index = correctIndexes(question)[0] === 1 ? 1 : 0;
+    return {
+      id: crypto.randomUUID(),
+      kind,
+      prompt,
+      choices: [yes, no],
+      correctIds: [index === 1 ? no.id : yes.id],
+      answers: [],
+      at,
+    };
+  }
+  const choices = (question && Array.isArray(question.choices) ? question.choices : []).map(choice);
+  const usable = choices.length >= 2 ? choices : [choice(""), choice("")];
+  const ids = correctIndexes(question)
+    .filter((index) => Number.isInteger(index) && usable[index])
+    .map((index) => usable[index].id);
+  const correctIds = ids.length ? ids : [usable[0].id];
+  return {
+    id: crypto.randomUUID(),
+    kind,
+    prompt,
+    choices: usable,
+    correctIds: kind === "choice" ? correctIds.slice(0, 1) : correctIds,
+    answers: [],
+    at,
+  };
+}
+
+function blankVideo() {
+  return { id: crypto.randomUUID(), type: "video", title: "", url: "", questions: [] };
+}
+
 function formLessons(lessons) {
   const source = Array.isArray(lessons) ? lessons : [];
   const groups = source.map((lesson) => {
@@ -117,52 +186,35 @@ function formLessons(lessons) {
         : [];
     const items = rawItems.map((item) => {
       if (item && item.type === "quiz") {
-        const questions = (Array.isArray(item.questions) ? item.questions : []).map((question) => {
-          const choices = (Array.isArray(question.choices) ? question.choices : []).map(choice);
-          const usable = choices.length >= 2 ? choices : [choice(""), choice("")];
-          const index = Number.isInteger(question.correctIndex) ? question.correctIndex : 0;
-          const correct = usable[index] || usable[0];
-          return {
-            id: crypto.randomUUID(),
-            prompt: String((question && question.prompt) || ""),
-            choices: usable,
-            correctId: correct.id,
-          };
-        });
-        const fallbackChoices = [choice(""), choice("")];
+        const questions = (Array.isArray(item.questions) ? item.questions : []).map((question) => (
+          formQuestion(question, false)
+        ));
         return {
           id: crypto.randomUUID(),
           type: "quiz",
           title: String(item.title || ""),
-          questions: questions.length
-            ? questions
-            : [{
-              id: crypto.randomUUID(),
-              prompt: "",
-              choices: fallbackChoices,
-              correctId: fallbackChoices[0].id,
-            }],
+          questions: questions.length ? questions : [formQuestion(null, false)],
         };
       }
+      const questions = (item && Array.isArray(item.questions) ? item.questions : []).map((question) => (
+        formQuestion(question, true)
+      ));
       return {
         id: crypto.randomUUID(),
         type: "video",
         title: String((item && item.title) || ""),
         url: String((item && (item.url || item.videoUrl)) || ""),
+        questions,
       };
     });
     return {
       id: crypto.randomUUID(),
       title: String((lesson && lesson.title) || ""),
-      items: items.length ? items : [{ id: crypto.randomUUID(), type: "video", title: "", url: "" }],
+      items: items.length ? items : [blankVideo()],
     };
   });
   if (!groups.length) {
-    return [{
-      id: crypto.randomUUID(),
-      title: "",
-      items: [{ id: crypto.randomUUID(), type: "video", title: "", url: "" }],
-    }];
+    return [{ id: crypto.randomUUID(), title: "", items: [blankVideo()] }];
   }
   return groups;
 }
@@ -226,6 +278,7 @@ function importPackage(buffer) {
     identifier: String(config.identifier || ""),
     packageVersion: metadata.packageVersion || "1.0.0",
     masteryScore: Number.isFinite(mastery) ? String(mastery) : "80",
+    requireQuizPass: config.requireQuizPass !== false,
     description: metadata.description,
     keywords: metadata.keywords.join(", "),
     author: metadata.author,

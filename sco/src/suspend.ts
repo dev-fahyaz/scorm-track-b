@@ -19,14 +19,48 @@ export function watchedFraction(bits: string): number {
   return watched / SEGMENTS;
 }
 
-export function encodeSuspend(positionSeconds: number, bits: string): string {
-  const ms = Math.max(0, Math.round(positionSeconds * 1000));
-  return `v1|${ms}|${bits}`;
+export interface StoredMark {
+  state: "." | "0" | "1";
+  response: string;
 }
 
-export function decodeSuspend(value: string): { bits: string } | null {
+export function encodeMarks(marks: StoredMark[]): string {
+  return marks
+    .map((mark) => (mark.state === "." ? "." : `${mark.state}:${encodeURIComponent(mark.response)}`))
+    .join(";");
+}
+
+export function decodeMarks(value: string, count: number): StoredMark[] {
+  const blank = (): StoredMark => ({ state: ".", response: "" });
+  const tokens = value ? value.split(";") : [];
+  if (tokens.length !== count) return Array.from({ length: count }, blank);
+  return tokens.map((token) => {
+    if (token === "." || (token[0] !== "0" && token[0] !== "1") || token[1] !== ":") return blank();
+    try {
+      return { state: token[0], response: decodeURIComponent(token.slice(2)) };
+    } catch {
+      return blank();
+    }
+  });
+}
+
+export function encodeSuspend(positionSeconds: number, bits: string, marks = ""): string {
+  const ms = Math.max(0, Math.round(positionSeconds * 1000));
+  if (!marks) return `v1|${ms}|${bits}`;
+  return `v2|${ms}|${bits}|${encodeURIComponent(marks)}`;
+}
+
+export function decodeSuspend(value: string): { bits: string; marks: string } | null {
   const parts = value.split("|");
-  if (parts.length !== 3 || parts[0] !== "v1") return null;
-  if (!/^[01]+$/.test(parts[2]) || parts[2].length !== SEGMENTS) return null;
-  return { bits: parts[2] };
+  const bitsOk = /^[01]+$/.test(parts[2] || "") && parts[2].length === SEGMENTS;
+  if (!bitsOk) return null;
+  if (parts.length === 3 && parts[0] === "v1") return { bits: parts[2], marks: "" };
+  if (parts.length === 4 && parts[0] === "v2") {
+    try {
+      return { bits: parts[2], marks: decodeURIComponent(parts[3]) };
+    } catch {
+      return { bits: parts[2], marks: "" };
+    }
+  }
+  return null;
 }

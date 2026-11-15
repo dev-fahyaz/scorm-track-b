@@ -1,4 +1,4 @@
-import type { Scorm12Runtime, ScormAdapter } from "./runtime";
+import type { InteractionRecord, Scorm12Runtime, ScormAdapter } from "./runtime";
 import { accepted } from "./runtime";
 import { formatScorm12 } from "./time";
 
@@ -70,6 +70,29 @@ export class Scorm12Adapter implements ScormAdapter {
 
   setSessionTime(seconds: number): void {
     this.api.LMSSetValue("cmi.core.session_time", formatScorm12(seconds));
+  }
+
+  setInteractions(records: InteractionRecord[]): void {
+    records.forEach((record, index) => {
+      const base = `cmi.interactions.${index}`;
+      let response = record.response;
+      let patterns = record.correct;
+      if (record.type === "true-false") {
+        response = response === "false" ? "f" : "t";
+        patterns = patterns.map((pattern) => (pattern === "false" ? "f" : "t"));
+      }
+      if (record.type === "fill-in") {
+        response = response.slice(0, 255);
+        patterns = patterns.map((pattern) => pattern.slice(0, 255));
+      }
+      this.api.LMSSetValue(`${base}.id`, record.id.slice(0, 255));
+      this.api.LMSSetValue(`${base}.type`, record.type);
+      this.api.LMSSetValue(`${base}.student_response`, response);
+      this.api.LMSSetValue(`${base}.result`, record.result);
+      patterns.forEach((pattern, patternIndex) => {
+        this.api.LMSSetValue(`${base}.correct_responses.${patternIndex}.pattern`, pattern);
+      });
+    });
   }
 
   commit(): boolean {

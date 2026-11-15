@@ -10,6 +10,7 @@ const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
 const IDENTIFIER = /^[A-Za-z0-9._:-]+$/;
 const PACKAGE_VERSION = /^[0-9A-Za-z._-]+$/;
 const POSTER = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/;
+const QUESTION_KINDS = new Set(["choice", "true-false", "multi", "fill-in"]);
 
 function durationOk(value) {
   return typeof value === "string" && value.trim() !== "PT" && DURATION.test(value.trim());
@@ -21,6 +22,57 @@ function httpsUrl(value) {
   } catch {
     return false;
   }
+}
+
+function questionKind(question) {
+  if (question && QUESTION_KINDS.has(question.kind)) return question.kind;
+  if (question && (Array.isArray(question.choices) || Number.isInteger(question.correctIndex))) return "choice";
+  return "";
+}
+
+function questionErrors(question, label) {
+  const errors = [];
+  const kind = questionKind(question);
+  const prompt = question && typeof question.prompt === "string" ? question.prompt.trim() : "";
+  if (!prompt) errors.push(`${label} needs a prompt.`);
+  if (!kind) {
+    errors.push(`${label} needs a question type.`);
+    return errors;
+  }
+  if (kind === "fill-in") {
+    const answers = question && Array.isArray(question.answers)
+      ? question.answers.map((answer) => String(answer || "").trim()).filter(Boolean)
+      : [];
+    if (!answers.length || answers.length > 6) {
+      errors.push(`${label} needs 1 to 6 accepted answers.`);
+    }
+    return errors;
+  }
+  if (kind === "true-false") {
+    const indexes = question && Array.isArray(question.correctIndexes) ? question.correctIndexes : [];
+    if (indexes.length !== 1 || (indexes[0] !== 0 && indexes[0] !== 1)) {
+      errors.push(`${label} needs true or false marked correct.`);
+    }
+    return errors;
+  }
+  const choices = question && Array.isArray(question.choices)
+    ? question.choices.map((choice) => String(choice || "").trim())
+    : [];
+  if (choices.length < 2 || choices.length > 6 || choices.some((choice) => !choice)) {
+    errors.push(`${label} needs 2 to 6 choices.`);
+  }
+  const indexes = question && Array.isArray(question.correctIndexes)
+    ? question.correctIndexes
+    : Number.isInteger(question && question.correctIndex) ? [question.correctIndex] : [];
+  const marked = indexes.filter((index, position) => (
+    Number.isInteger(index) && index >= 0 && index < choices.length && indexes.indexOf(index) === position
+  ));
+  if (kind === "multi") {
+    if (!marked.length) errors.push(`${label} needs at least one correct choice.`);
+  } else if (marked.length !== 1) {
+    errors.push(`${label} needs one correct choice.`);
+  }
+  return errors;
 }
 
 function lessonErrors(lessons, options) {
@@ -47,26 +99,25 @@ function lessonErrors(lessons, options) {
         if (!httpsUrl(url)) {
           errors.push(`${itemLabel} needs an https file URL or a YouTube link.`);
         }
-        return;
       }
       if (!checkQuizzes) return;
       const questions = item && Array.isArray(item.questions) ? item.questions : [];
-      if (!questions.length || questions.length > 20) {
+      if (kind === "quiz" && (!questions.length || questions.length > 20)) {
         errors.push(`${itemLabel} needs between 1 and 20 questions.`);
         return;
       }
+      if (kind === "video" && questions.length > 20) {
+        errors.push(`${itemLabel} can hold up to 20 questions.`);
+        return;
+      }
       questions.forEach((question, questionIndex) => {
-        const prompt = question && typeof question.prompt === "string" ? question.prompt.trim() : "";
-        if (!prompt) errors.push(`${itemLabel} question ${questionIndex + 1} needs a prompt.`);
-        const choices = question && Array.isArray(question.choices)
-          ? question.choices.map((choice) => String(choice || "").trim())
-          : [];
-        if (choices.length < 2 || choices.length > 6 || choices.some((choice) => !choice)) {
-          errors.push(`${itemLabel} question ${questionIndex + 1} needs 2 to 6 choices.`);
-        }
-        const correct = question ? question.correctIndex : -1;
-        if (!Number.isInteger(correct) || correct < 0 || correct >= choices.filter(Boolean).length) {
-          errors.push(`${itemLabel} question ${questionIndex + 1} needs one correct choice.`);
+        const questionLabel = `${itemLabel} question ${questionIndex + 1}`;
+        errors.push(...questionErrors(question, questionLabel));
+        if (kind !== "video") return;
+        const at = question ? question.at : null;
+        if (at == null) return;
+        if (!Number.isInteger(at) || at < 0 || at > 86400) {
+          errors.push(`${questionLabel} needs a time in minutes and seconds, or no time to ask after the video.`);
         }
       });
     });
@@ -79,6 +130,45 @@ function itemHref(lessonNumber, itemNumber, count) {
   return `lesson-${lessonNumber}-${itemNumber}.html`;
 }
 
+function normalizeQuestion(question, withTime) {
+  const kind = questionKind(question) || "choice";
+  const prompt = String((question && question.prompt) || "").trim();
+  const at = withTime && question && Number.isInteger(question.at) && question.at >= 0 ? question.at : null;
+  if (kind === "fill-in") {
+    const answers = (question && Array.isArray(question.answers) ? question.answers : [])
+      .map((answer) => String(answer || "").trim())
+      .filter(Boolean);
+    return { kind, prompt, choices: [], correctIndexes: [], answers, at };
+  }
+  if (kind === "true-false") {
+    const indexes = question && Array.isArray(question.correctIndexes) ? question.correctIndexes : [];
+    return {
+      kind,
+      prompt,
+      choices: ["True", "False"],
+      correctIndexes: [indexes[0] === 1 ? 1 : 0],
+      answers: [],
+      at,
+    };
+  }
+  const choices = (question && Array.isArray(question.choices) ? question.choices : [])
+    .map((choice) => String(choice || "").trim());
+  const source = question && Array.isArray(question.correctIndexes)
+    ? question.correctIndexes
+    : Number.isInteger(question && question.correctIndex) ? [question.correctIndex] : [];
+  const correctIndexes = source.filter((index, position) => (
+    Number.isInteger(index) && index >= 0 && index < choices.length && source.indexOf(index) === position
+  ));
+  return {
+    kind,
+    prompt,
+    choices,
+    correctIndexes: kind === "choice" ? correctIndexes.slice(0, 1) : correctIndexes,
+    answers: [],
+    at,
+  };
+}
+
 function normalizeLessons(lessons) {
   return lessons.map((lesson, lessonIndex) => {
     const sourceItems = Array.isArray(lesson.items) ? lesson.items : [];
@@ -87,19 +177,15 @@ function normalizeLessons(lessons) {
       const href = itemHref(lessonIndex + 1, itemIndex + 1, sourceItems.length);
       const fallback = type === "quiz" ? `Quiz ${itemIndex + 1}` : `Video ${itemIndex + 1}`;
       const title = (item && String(item.title || "").trim()) || fallback;
-      if (type === "quiz") {
-        const questions = (item.questions || []).map((question) => ({
-          prompt: String(question.prompt || "").trim(),
-          choices: (question.choices || []).map((choice) => String(choice || "").trim()),
-          correctIndex: question.correctIndex,
-        }));
-        return { type, title, href, questions };
-      }
+      const questions = (item && Array.isArray(item.questions) ? item.questions : [])
+        .map((question) => normalizeQuestion(question, type === "video"));
+      if (type === "quiz") return { type, title, href, questions };
       return {
         type,
         title,
         href,
         url: String((item && (item.url || item.videoUrl)) || "").trim(),
+        questions,
       };
     });
     return {
@@ -129,6 +215,9 @@ function validate(body) {
   }
   if (typeof body.masteryScore !== "number" || body.masteryScore < 0 || body.masteryScore > 100) {
     errors.push("Enter a mastery score from 0 to 100.");
+  }
+  if (typeof body.requireQuizPass !== "boolean") {
+    errors.push("Choose whether a failed quiz blocks completion.");
   }
   errors.push(...lessonErrors(body.lessons, { quizzes: true }));
 
@@ -203,6 +292,7 @@ function courseHtml(title, lessonIndex, itemIndex) {
     #quiz fieldset { border: 1px solid #3a4250; border-radius: 10px; margin: 0 0 14px; padding: 12px 14px; }
     #quiz legend { padding: 0 6px; }
     #quiz label { display: block; margin: 8px 0; }
+    #quiz input[type="text"] { width: 100%; box-sizing: border-box; margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid #3a4250; background: #1c222c; color: #f6f3ec; }
     #quiz button { margin-top: 8px; border: 0; border-radius: 999px; padding: 10px 16px; background: #f6f3ec; color: #14181f; font-weight: 700; cursor: pointer; }
     #quiz button:disabled { opacity: 0.6; cursor: default; }
     #status { font-family: "Segoe UI", sans-serif; color: #d5d0c6; font-size: 0.92rem; }
@@ -340,6 +430,7 @@ async function buildCourse(body, playerFile) {
       lessons,
       completionThreshold: body.completionThreshold / 100,
       masteryScore: body.masteryScore,
+      requireQuizPass: body.requireQuizPass,
       poster,
     };
     await fse.writeFile(path.join(source, "config.json"), JSON.stringify(courseConfig, null, 2), "utf8");

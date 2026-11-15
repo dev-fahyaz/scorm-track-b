@@ -1,18 +1,26 @@
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { buildPackage, downloadBlob, draftCourse, importPackage } from "./api";
 import {
   applyDraft,
   emptyForm,
   itemHref,
+  formatAt,
+  joinAt,
   newLesson,
   newQuestion,
   newQuiz,
   newVideo,
+  questionKindLabel,
+  QUESTION_KINDS,
+  splitAt,
   toRequest,
+  withKind,
   type LessonGroup,
   type LessonItem,
   type PackageForm,
+  type QuestionKind,
   type QuizItem,
+  type QuizQuestion,
   type ScormVersion,
 } from "./types";
 import { manifestId, needsDraft, organizationId, validateForm, validateLessons } from "./validate";
@@ -194,7 +202,7 @@ export function App() {
         <section>
           <h2>Lessons</h2>
           <p className="section-note">
-            Each lesson can hold videos and quizzes. A video is an https file or a YouTube link. The files stay on their host. The zip contains the player, not the media.
+            Each lesson can hold videos and quizzes. Add questions on a video to pause at a time, or add a quiz as its own launch file. Media stays on its host. The zip contains the player, not the video.
           </p>
           <div className="file-row">
             <button
@@ -425,6 +433,17 @@ export function App() {
               onChange={(value) => update("masteryScore", value)}
               inputMode="decimal"
             />
+            <div className="field">
+              <label className="check-line">
+                <input
+                  id="requireQuizPass"
+                  type="checkbox"
+                  checked={form.requireQuizPass}
+                  onChange={(event) => update("requireQuizPass", event.target.checked)}
+                />
+                A failed quiz blocks completion
+              </label>
+            </div>
             <Field label="Description" name="description" error={errors.description} wide>
               <textarea
                 id="description"
@@ -550,33 +569,46 @@ function SubLesson(props: {
         </button>
       </div>
       {item.type === "video" ? (
-        <div className="grid">
-          <Field label="Video title" name={`video-title-${lessonIndex}-${itemIndex}`}>
-            <input
-              id={`video-title-${lessonIndex}-${itemIndex}`}
-              value={item.title}
-              placeholder="Filled by the draft"
-              onChange={(event) =>
-                props.onChange((current) =>
-                  current.type === "video" ? { ...current, title: event.target.value } : current
-                )
-              }
-            />
-          </Field>
-          <Field label="Video URL" name={urlKey} error={props.errors[urlKey]}>
-            <input
-              id={urlKey}
-              value={item.url}
-              placeholder="https://…/video.mp4 or a YouTube link"
-              aria-invalid={props.errors[urlKey] ? true : undefined}
-              onChange={(event) =>
-                props.onChange((current) =>
-                  current.type === "video" ? { ...current, url: event.target.value } : current
-                )
-              }
-            />
-          </Field>
-        </div>
+        <>
+          <div className="grid">
+            <Field label="Video title" name={`video-title-${lessonIndex}-${itemIndex}`}>
+              <input
+                id={`video-title-${lessonIndex}-${itemIndex}`}
+                value={item.title}
+                placeholder="Filled by the draft"
+                onChange={(event) =>
+                  props.onChange((current) =>
+                    current.type === "video" ? { ...current, title: event.target.value } : current
+                  )
+                }
+              />
+            </Field>
+            <Field label="Video URL" name={urlKey} error={props.errors[urlKey]}>
+              <input
+                id={urlKey}
+                value={item.url}
+                placeholder="https://…/video.mp4 or a YouTube link"
+                aria-invalid={props.errors[urlKey] ? true : undefined}
+                onChange={(event) =>
+                  props.onChange((current) =>
+                    current.type === "video" ? { ...current, url: event.target.value } : current
+                  )
+                }
+              />
+            </Field>
+          </div>
+          <QuestionList
+            questions={item.questions}
+            lessonIndex={lessonIndex}
+            itemIndex={itemIndex}
+            errors={props.errors}
+            showTime
+            allowEmpty
+            onChange={(questions) =>
+              props.onChange((current) => (current.type === "video" ? { ...current, questions } : current))
+            }
+          />
+        </>
       ) : (
         <QuizEditor
           item={item}
@@ -599,9 +631,6 @@ function QuizEditor(props: {
 }) {
   const { item, lessonIndex, itemIndex } = props;
   const quizKey = `quiz-${lessonIndex}-${itemIndex}`;
-  function edit(change: (quiz: QuizItem) => QuizItem) {
-    props.onChange((current) => (current.type === "quiz" ? change(current) : current));
-  }
   return (
     <div className="quiz-editor">
       <Field label="Quiz title" name={quizKey} error={props.errors[quizKey]}>
@@ -609,133 +638,331 @@ function QuizEditor(props: {
           id={quizKey}
           value={item.title}
           placeholder="Quiz"
-          onChange={(event) => edit((quiz) => ({ ...quiz, title: event.target.value }))}
+          onChange={(event) =>
+            props.onChange((current) =>
+              current.type === "quiz" ? { ...current, title: event.target.value } : current
+            )
+          }
         />
       </Field>
-      {item.questions.map((question, questionIndex) => {
-        const key = `${lessonIndex}-${itemIndex}-${questionIndex}`;
+      <QuestionList
+        questions={item.questions}
+        lessonIndex={lessonIndex}
+        itemIndex={itemIndex}
+        errors={props.errors}
+        showTime={false}
+        allowEmpty={false}
+        onChange={(questions) =>
+          props.onChange((current) => (current.type === "quiz" ? { ...current, questions } : current))
+        }
+      />
+    </div>
+  );
+}
+
+function QuestionList(props: {
+  questions: QuizQuestion[];
+  lessonIndex: number;
+  itemIndex: number;
+  errors: Record<string, string>;
+  showTime: boolean;
+  allowEmpty: boolean;
+  onChange: (questions: QuizQuestion[]) => void;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const listKey = `quiz-${props.lessonIndex}-${props.itemIndex}`;
+  useEffect(() => {
+    const marker = `-${props.lessonIndex}-${props.itemIndex}-`;
+    const match = Object.keys(props.errors).find((name) => name.includes(marker));
+    if (!match) return;
+    const index = Number(match.slice(match.lastIndexOf("-") + 1));
+    const question = props.questions[index];
+    if (question) setOpenId(question.id);
+  }, [props.errors, props.lessonIndex, props.itemIndex]);
+  function edit(id: string, change: (question: QuizQuestion) => QuizQuestion) {
+    props.onChange(props.questions.map((question) => (question.id === id ? change(question) : question)));
+  }
+  return (
+    <div className="quiz-editor">
+      {props.errors[listKey] ? <p className="error">{props.errors[listKey]}</p> : null}
+      {props.allowEmpty && props.questions.length === 0 ? (
+        <p className="hint">No questions yet. Add one to pause this video, or leave it watch-only.</p>
+      ) : null}
+      {props.questions.map((question, questionIndex) => {
+        const key = `${props.lessonIndex}-${props.itemIndex}-${questionIndex}`;
+        const open = openId === question.id;
         return (
-          <div className="question" key={question.id}>
-            <Field label={`Question ${questionIndex + 1}`} name={`quiz-prompt-${key}`} error={props.errors[`quiz-prompt-${key}`]}>
-              <input
-                id={`quiz-prompt-${key}`}
-                value={question.prompt}
-                onChange={(event) =>
-                  edit((quiz) => ({
-                    ...quiz,
-                    questions: quiz.questions.map((entry) =>
-                      entry.id === question.id ? { ...entry, prompt: event.target.value } : entry
-                    ),
-                  }))
-                }
+          <div className={open ? "question open" : "question"} key={question.id}>
+            <button
+              type="button"
+              className="question-summary"
+              aria-expanded={open}
+              onClick={() => setOpenId(open ? null : question.id)}
+            >
+              <span className="kind">{questionKindLabel(question.kind)}</span>
+              <span className="prompt">{question.prompt.trim() || `Question ${questionIndex + 1}`}</span>
+              {props.showTime ? <span className="when">{formatAt(question.at)}</span> : null}
+            </button>
+            {open ? (
+              <QuestionBody
+                question={question}
+                questionKey={key}
+                showTime={props.showTime}
+                errors={props.errors}
+                canRemove={props.allowEmpty || props.questions.length > 1}
+                onChange={(change) => edit(question.id, change)}
+                onRemove={() => {
+                  props.onChange(props.questions.filter((entry) => entry.id !== question.id));
+                  setOpenId(null);
+                }}
               />
-            </Field>
-            {props.errors[`quiz-choices-${key}`] ? <p className="error">{props.errors[`quiz-choices-${key}`]}</p> : null}
-            {props.errors[`quiz-correct-${key}`] ? <p className="error">{props.errors[`quiz-correct-${key}`]}</p> : null}
-            <div className="choice-list">
-              {question.choices.map((choice, choiceIndex) => (
-                <div className="choice-row" key={choice.id}>
-                  <label className="correct-mark">
-                    <input
-                      type="radio"
-                      name={`correct-${question.id}`}
-                      checked={question.correctId === choice.id}
-                      onChange={() =>
-                        edit((quiz) => ({
-                          ...quiz,
-                          questions: quiz.questions.map((entry) =>
-                            entry.id === question.id ? { ...entry, correctId: choice.id } : entry
-                          ),
-                        }))
-                      }
-                    />
-                    Correct
-                  </label>
-                  <input
-                    aria-label={`Choice ${choiceIndex + 1}`}
-                    value={choice.text}
-                    onChange={(event) =>
-                      edit((quiz) => ({
-                        ...quiz,
-                        questions: quiz.questions.map((entry) =>
-                          entry.id === question.id
-                            ? {
-                                ...entry,
-                                choices: entry.choices.map((option) =>
-                                  option.id === choice.id ? { ...option, text: event.target.value } : option
-                                ),
-                              }
-                            : entry
-                        ),
-                      }))
-                    }
-                  />
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={question.choices.length <= 2}
-                    onClick={() =>
-                      edit((quiz) => ({
-                        ...quiz,
-                        questions: quiz.questions.map((entry) => {
-                          if (entry.id !== question.id) return entry;
-                          const choices = entry.choices.filter((option) => option.id !== choice.id);
-                          return {
-                            ...entry,
-                            choices,
-                            correctId: entry.correctId === choice.id ? choices[0].id : entry.correctId,
-                          };
-                        }),
-                      }))
-                    }
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="file-row">
-              <button
-                type="button"
-                className="text-button"
-                disabled={question.choices.length >= 6}
-                onClick={() =>
-                  edit((quiz) => ({
-                    ...quiz,
-                    questions: quiz.questions.map((entry) =>
-                      entry.id === question.id
-                        ? { ...entry, choices: [...entry.choices, { id: crypto.randomUUID(), text: "" }] }
-                        : entry
-                    ),
-                  }))
-                }
-              >
-                Add choice
-              </button>
-              <button
-                type="button"
-                className="text-button"
-                disabled={item.questions.length <= 1}
-                onClick={() =>
-                  edit((quiz) => ({
-                    ...quiz,
-                    questions: quiz.questions.filter((entry) => entry.id !== question.id),
-                  }))
-                }
-              >
-                Remove question
-              </button>
-            </div>
+            ) : null}
           </div>
         );
       })}
       <button
         type="button"
         className="text-button"
-        disabled={item.questions.length >= 20}
-        onClick={() => edit((quiz) => ({ ...quiz, questions: [...quiz.questions, newQuestion()] }))}
+        disabled={props.questions.length >= 20}
+        onClick={() => {
+          const question = newQuestion();
+          props.onChange([...props.questions, question]);
+          setOpenId(question.id);
+        }}
       >
         Add question
+      </button>
+    </div>
+  );
+}
+
+function QuestionBody(props: {
+  question: QuizQuestion;
+  questionKey: string;
+  showTime: boolean;
+  errors: Record<string, string>;
+  canRemove: boolean;
+  onChange: (change: (question: QuizQuestion) => QuizQuestion) => void;
+  onRemove: () => void;
+}) {
+  const { question, questionKey } = props;
+  const time = splitAt(question.at);
+  return (
+    <div className="question-body">
+      <Field label="Type" name={`quiz-kind-${questionKey}`}>
+        <select
+          id={`quiz-kind-${questionKey}`}
+          value={question.kind}
+          onChange={(event) => props.onChange((current) => withKind(current, event.target.value as QuestionKind))}
+        >
+          {QUESTION_KINDS.map((kind) => (
+            <option key={kind} value={kind}>
+              {questionKindLabel(kind)}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Question" name={`quiz-prompt-${questionKey}`} error={props.errors[`quiz-prompt-${questionKey}`]}>
+        <input
+          id={`quiz-prompt-${questionKey}`}
+          value={question.prompt}
+          onChange={(event) => props.onChange((current) => ({ ...current, prompt: event.target.value }))}
+        />
+      </Field>
+      {props.showTime ? (
+        <div className="time-row">
+          <Field label="Minutes" name={`quiz-minutes-${questionKey}`} error={props.errors[`quiz-time-${questionKey}`]}>
+            <input
+              id={`quiz-minutes-${questionKey}`}
+              inputMode="numeric"
+              value={question.at === "invalid" ? "" : time.minutes}
+              placeholder="—"
+              onChange={(event) =>
+                props.onChange((current) => ({ ...current, at: joinAt(event.target.value, time.seconds) }))
+              }
+            />
+          </Field>
+          <Field label="Seconds" name={`quiz-seconds-${questionKey}`}>
+            <input
+              id={`quiz-seconds-${questionKey}`}
+              inputMode="numeric"
+              value={question.at === "invalid" ? "" : time.seconds}
+              placeholder="—"
+              onChange={(event) =>
+                props.onChange((current) => ({ ...current, at: joinAt(time.minutes, event.target.value) }))
+              }
+            />
+          </Field>
+          <p className="hint">Leave both blank to ask after the video.</p>
+        </div>
+      ) : null}
+      {question.kind === "true-false" ? (
+        <TrueFalse question={question} onChange={props.onChange} error={props.errors[`quiz-correct-${questionKey}`]} />
+      ) : null}
+      {question.kind === "fill-in" ? (
+        <FillIn question={question} questionKey={questionKey} errors={props.errors} onChange={props.onChange} />
+      ) : null}
+      {question.kind === "choice" || question.kind === "multi" ? (
+        <Choices question={question} questionKey={questionKey} errors={props.errors} onChange={props.onChange} />
+      ) : null}
+      <button type="button" className="text-button" disabled={!props.canRemove} onClick={props.onRemove}>
+        Remove question
+      </button>
+    </div>
+  );
+}
+
+function TrueFalse(props: {
+  question: QuizQuestion;
+  error?: string;
+  onChange: (change: (question: QuizQuestion) => QuizQuestion) => void;
+}) {
+  return (
+    <div className="choice-list">
+      {props.error ? <p className="error">{props.error}</p> : null}
+      {props.question.choices.map((choice) => (
+        <label className="choice-row plain" key={choice.id}>
+          <input
+            type="radio"
+            name={`correct-${props.question.id}`}
+            checked={props.question.correctIds.includes(choice.id)}
+            onChange={() => props.onChange((current) => ({ ...current, correctIds: [choice.id] }))}
+          />
+          <span>{choice.text}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function FillIn(props: {
+  question: QuizQuestion;
+  questionKey: string;
+  errors: Record<string, string>;
+  onChange: (change: (question: QuizQuestion) => QuizQuestion) => void;
+}) {
+  const error = props.errors[`quiz-answers-${props.questionKey}`];
+  return (
+    <div className="choice-list">
+      {error ? <p className="error">{error}</p> : null}
+      {props.question.answers.map((answer, index) => (
+        <div className="choice-row answer-row" key={`${props.question.id}-${index}`}>
+          <input
+            aria-label={`Accepted answer ${index + 1}`}
+            value={answer}
+            onChange={(event) =>
+              props.onChange((current) => ({
+                ...current,
+                answers: current.answers.map((entry, entryIndex) => (entryIndex === index ? event.target.value : entry)),
+              }))
+            }
+          />
+          <button
+            type="button"
+            className="text-button"
+            disabled={props.question.answers.length <= 1}
+            onClick={() =>
+              props.onChange((current) => ({
+                ...current,
+                answers: current.answers.filter((_, entryIndex) => entryIndex !== index),
+              }))
+            }
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="text-button"
+        disabled={props.question.answers.length >= 6}
+        onClick={() => props.onChange((current) => ({ ...current, answers: [...current.answers, ""] }))}
+      >
+        Add accepted answer
+      </button>
+    </div>
+  );
+}
+
+function Choices(props: {
+  question: QuizQuestion;
+  questionKey: string;
+  errors: Record<string, string>;
+  onChange: (change: (question: QuizQuestion) => QuizQuestion) => void;
+}) {
+  const multiple = props.question.kind === "multi";
+  return (
+    <div className="choice-list">
+      {props.errors[`quiz-choices-${props.questionKey}`] ? (
+        <p className="error">{props.errors[`quiz-choices-${props.questionKey}`]}</p>
+      ) : null}
+      {props.errors[`quiz-correct-${props.questionKey}`] ? (
+        <p className="error">{props.errors[`quiz-correct-${props.questionKey}`]}</p>
+      ) : null}
+      {props.question.choices.map((choice, index) => {
+        const marked = props.question.correctIds.includes(choice.id);
+        return (
+          <div className="choice-row" key={choice.id}>
+            <input
+              type={multiple ? "checkbox" : "radio"}
+              name={`correct-${props.question.id}`}
+              aria-label={marked ? "Correct answer" : "Mark as correct"}
+              checked={marked}
+              onChange={() =>
+                props.onChange((current) => {
+                  if (!multiple) return { ...current, correctIds: [choice.id] };
+                  const correctIds = marked
+                    ? current.correctIds.filter((id) => id !== choice.id)
+                    : [...current.correctIds, choice.id];
+                  return { ...current, correctIds };
+                })
+              }
+            />
+            <input
+              aria-label={`Choice ${index + 1}`}
+              value={choice.text}
+              onChange={(event) =>
+                props.onChange((current) => ({
+                  ...current,
+                  choices: current.choices.map((option) =>
+                    option.id === choice.id ? { ...option, text: event.target.value } : option
+                  ),
+                }))
+              }
+            />
+            <button
+              type="button"
+              className="text-button"
+              disabled={props.question.choices.length <= 2}
+              onClick={() =>
+                props.onChange((current) => {
+                  const choices = current.choices.filter((option) => option.id !== choice.id);
+                  const correctIds = current.correctIds.filter((id) => id !== choice.id);
+                  return {
+                    ...current,
+                    choices,
+                    correctIds: correctIds.length ? correctIds : [choices[0].id],
+                  };
+                })
+              }
+            >
+              Remove
+            </button>
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        className="text-button"
+        disabled={props.question.choices.length >= 6}
+        onClick={() =>
+          props.onChange((current) => ({
+            ...current,
+            choices: [...current.choices, { id: crypto.randomUUID(), text: "" }],
+          }))
+        }
+      >
+        Add choice
       </button>
     </div>
   );
@@ -753,6 +980,7 @@ function StructureNode(props: { lesson: LessonGroup; lessonIndex: number; manife
         Item <span className="muted">item_{manifest}{suffix}</span>
         <ul>
           <li>Title: {title}</li>
+          {item && item.questions.length ? <li>Questions: {item.questions.length}</li> : null}
           <li>Launch: {item ? itemHref(lessonIndex, 0, 1) : "—"}</li>
           <li>Resource: resource_{manifest}{suffix}</li>
         </ul>
@@ -773,6 +1001,7 @@ function StructureNode(props: { lesson: LessonGroup; lessonIndex: number; manife
               {item.type === "quiz" ? "Quiz" : "Video"} <span className="muted">item_{manifest}{child}</span>
               <ul>
                 <li>Title: {title}</li>
+                {item.questions.length ? <li>Questions: {item.questions.length}</li> : null}
                 <li>Launch: {itemHref(lessonIndex, itemIndex, lesson.items.length)}</li>
                 <li>Resource: resource_{manifest}{child}</li>
               </ul>
