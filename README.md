@@ -28,7 +28,7 @@ The form starts with lessons and the organization. Each lesson can hold videos a
 
 **Draft course** fills those fields from OpenRouter. It uses the video URLs and the note. It does not invent quiz questions. The fields stay editable. **Build SCORM zip** uses the form as it stands, and drafts first when the title, identifier, or description is still empty.
 
-A lesson with one sub-lesson stays one launch file (`lesson-1.html`). A lesson with more than one becomes a folder, and each video or quiz is its own file (`lesson-1-1.html`, `lesson-1-2.html`). The manifest has no sequencing rules. The zip root contains:
+A lesson with one sub-lesson stays one launch file (`lesson-1.html`). A lesson with more than one becomes a folder, and each video or quiz is its own file (`lesson-1-1.html`, `lesson-1-2.html`). Each later file stays locked until the one before it is passed. Earlier files stay open for review. The zip root contains:
 
 * `imsmanifest.xml`
 * `metadata.xml`
@@ -38,7 +38,7 @@ A lesson with one sub-lesson stays one launch file (`lesson-1.html`). A lesson w
 
 `player.js` walks parent frames for the SCORM API. A file URL plays in the video element. A YouTube link plays through the YouTube IFrame API on youtube.com, with the page origin sent to the player. Both resume from the bookmark, store a short watched-segment bitmap in suspend data, and commit about every 15 seconds and on exit. Completion is set when the watched fraction reaches the threshold. If the YouTube API cannot load, the page says playback could not be tracked. If the owner has disabled embedding, the page says so.
 
-A question is single choice, true/false, multiple answers, or a short fill-in. It can sit on a video at a minute-and-second mark, or after the video ends, or in its own quiz launch file. Reaching an unanswered checkpoint pauses the video there. The score is correct answers out of 100. Each answer is also written to `cmi.interactions`. When **A failed quiz blocks completion** is on, the item stays incomplete until the watch threshold is met and the score reaches the mastery score. When it is off, the watch threshold still completes a video, and the quiz still reports the score and pass or fail. A failed gated quiz can be retried. Answered checkpoints are kept in suspend data, so reopening the lesson does not ask them again.
+A question is single choice, true/false, multiple answers, or a short fill-in. A question on a video pauses at its minute-and-second mark and shows over the video. Leave the time blank and it appears over the video when the video ends. A question in its own quiz launch file ignores time. The score is correct answers out of 100. Each answer is also written to `cmi.interactions`. When **A failed quiz blocks completion** is on, the item stays incomplete until the watch threshold is met and the score reaches the mastery score. When it is off, the watch threshold still completes a video, and the quiz still reports the score and pass or fail. A failed gated quiz can be retried. Answered checkpoints and a submitted assessment are kept in suspend data, so reopening the lesson shows the saved answers instead of a blank form.
 
 ## Library
 

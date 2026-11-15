@@ -1,10 +1,18 @@
-import { createCheckpointSession, mountQuiz, readQuestions, type CheckpointSession } from "./quiz";
+import {
+  createCheckpointSession,
+  marksForAnswers,
+  mountQuiz,
+  readQuestions,
+  reviewFromMarks,
+  type CheckpointSession,
+} from "./quiz";
 import { findApi, type InteractionRecord, type ScormAdapter } from "./runtime";
 import { Scorm12Adapter } from "./scorm12";
 import { Scorm2004Adapter } from "./scorm2004";
 import {
   decodeSuspend,
   emptyBits,
+  encodeMarks,
   encodeSuspend,
   markSegment,
   watchedFraction,
@@ -263,13 +271,35 @@ async function main(): Promise<void> {
       adapter.terminate();
     };
     window.addEventListener("pagehide", finish);
-    const present = () => {
-      mountQuiz(quizRoot, resolved.title, questions, (result) => {
+    const savedMarks = adapter ? decodeSuspend(adapter.getSuspendData())?.marks || "" : "";
+    const describe = (score: number, passed: boolean, complete: boolean) => {
+      if (!adapter) return `SCORM API not found. Score ${score}.`;
+      if (passed) return `Passed with ${score}. Reported to ${apiName}.`;
+      if (complete) return `Score ${score}. Mastery is ${mastery}. Reported to ${apiName}.`;
+      return `Score ${score}. Mastery is ${mastery}. The item stays incomplete.`;
+    };
+    const clearSaved = () => {
+      if (!adapter) return;
+      const blank = questions.map(() => ({ state: "." as const, response: "" }));
+      adapter.setSuspendData(encodeSuspend(0, emptyBits(), encodeMarks(blank)));
+      adapter.commit();
+    };
+    const offerRetry = () => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Retry quiz";
+      button.addEventListener("click", () => {
+        clearSaved();
+        present(null);
+      });
+      quizRoot.append(button);
+    };
+    const present = (review: ReturnType<typeof reviewFromMarks>) => {
+      mountQuiz(quizRoot, questions, (result) => {
         const passed = result.score >= mastery;
         const complete = !requirePass || passed;
-        if (!adapter) {
-          setStatus(`SCORM API not found. Score ${result.score}.`);
-        } else {
+        if (adapter) {
+          adapter.setSuspendData(encodeSuspend(0, emptyBits(), encodeMarks(marksForAnswers(questions, result.answers))));
           adapter.setScore(result.score, 0, 100);
           adapter.setProgress(result.score / 100);
           adapter.setInteractions(result.interactions);
@@ -277,24 +307,33 @@ async function main(): Promise<void> {
           adapter.setCompletion(complete);
           adapter.setSessionTime((Date.now() - sessionStart) / 1000);
           adapter.commit();
-          setStatus(
-            passed
-              ? `Passed with ${result.score}. Reported to ${apiName}.`
-              : complete
-                ? `Score ${result.score}. Mastery is ${mastery}. Reported to ${apiName}.`
-                : `Score ${result.score}. Mastery is ${mastery}. The item stays incomplete.`
-          );
         }
-        if (!complete) {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.textContent = "Retry quiz";
-          button.addEventListener("click", () => present());
-          quizRoot.append(button);
-        }
-      });
+        setStatus(describe(result.score, passed, complete));
+        if (!complete) offerRetry();
+      }, review ? {
+        initial: review.answers,
+        locked: true,
+        note: `Score ${review.score}. ${review.correct} of ${questions.length} correct.`,
+      } : undefined);
+      if (!review) return;
+      const passed = review.score >= mastery;
+      const complete = !requirePass || passed;
+      if (adapter) {
+        adapter.setScore(review.score, 0, 100);
+        adapter.setProgress(review.score / 100);
+        adapter.setSuccess(passed);
+        adapter.setCompletion(complete);
+        adapter.setSessionTime((Date.now() - sessionStart) / 1000);
+        adapter.commit();
+      }
+      setStatus(describe(review.score, passed, complete));
+      if (!complete) offerRetry();
     };
-    present();
+    const review = reviewFromMarks(questions, savedMarks);
+    if (!review) {
+      setStatus(adapter ? "Answer the questions." : "SCORM API not found. Answer the questions.");
+    }
+    present(review);
     return;
   }
 

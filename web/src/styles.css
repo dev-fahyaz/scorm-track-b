@@ -182,10 +182,15 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] {
 
 .question {
   margin-top: 12px;
-  padding: 12px;
-  border-radius: 12px;
+  padding: 14px;
+  border-radius: 14px;
   background: #fff;
   border: 1px solid var(--line);
+  box-shadow: 0 1px 0 rgba(27, 36, 48, 0.03);
+}
+
+.question.open {
+  border-color: #c9ddd6;
 }
 
 .question-summary {
@@ -202,10 +207,13 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] {
 
 .question-summary .kind {
   flex: 0 0 auto;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--accent-dark);
+  background: #e7f3ee;
+  border-radius: 999px;
+  padding: 3px 8px;
 }
 
 .question-summary .prompt {
@@ -229,18 +237,36 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] {
 .choice-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbf9f4;
+}
+
+.choice-row:focus-within {
+  border-color: var(--accent);
+  background: #fff;
 }
 
 .choice-row.plain { grid-template-columns: auto minmax(0, 1fr); }
 .choice-row.answer-row { grid-template-columns: minmax(0, 1fr) auto; }
 
+.choice-row input[type="radio"],
+.choice-row input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--accent);
+}
+
 .time-row {
   display: grid;
-  grid-template-columns: 8rem 8rem 1fr;
+  grid-template-columns: 8rem 8rem minmax(0, 1fr);
   gap: 12px;
   align-items: end;
+  padding: 12px;
+  border-radius: 12px;
+  background: #f7f4ee;
 }
 
 .check-line {

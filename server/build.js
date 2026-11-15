@@ -114,9 +114,9 @@ function lessonErrors(lessons, options) {
         const questionLabel = `${itemLabel} question ${questionIndex + 1}`;
         errors.push(...questionErrors(question, questionLabel));
         if (kind !== "video") return;
-        const at = question ? question.at : null;
-        if (at == null) return;
-        if (!Number.isInteger(at) || at < 0 || at > 86400) {
+        const rawAt = question ? question.at : null;
+        if (rawAt == null || rawAt === "") return;
+        if (timeValue(rawAt) == null) {
           errors.push(`${questionLabel} needs a time in minutes and seconds, or no time to ask after the video.`);
         }
       });
@@ -130,10 +130,17 @@ function itemHref(lessonNumber, itemNumber, count) {
   return `lesson-${lessonNumber}-${itemNumber}.html`;
 }
 
+function timeValue(value) {
+  if (value == null || value === "") return null;
+  const number = typeof value === "number" ? value : Number(String(value).trim());
+  if (!Number.isInteger(number) || number < 0 || number > 86400) return null;
+  return number;
+}
+
 function normalizeQuestion(question, withTime) {
   const kind = questionKind(question) || "choice";
   const prompt = String((question && question.prompt) || "").trim();
-  const at = withTime && question && Number.isInteger(question.at) && question.at >= 0 ? question.at : null;
+  const at = withTime ? timeValue(question && question.at) : null;
   if (kind === "fill-in") {
     const answers = (question && Array.isArray(question.answers) ? question.answers : [])
       .map((answer) => String(answer || "").trim())
@@ -288,12 +295,19 @@ function courseHtml(title, lessonIndex, itemIndex) {
     #youtube-frame.on { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; }
     #youtube-frame iframe { width: 100%; height: 100%; border: 0; }
     #quiz.on { display: block; font-family: "Segoe UI", sans-serif; }
-    #quiz h2 { font-family: Georgia, "Iowan Old Style", serif; font-size: 1.25rem; margin: 0 0 16px; }
-    #quiz fieldset { border: 1px solid #3a4250; border-radius: 10px; margin: 0 0 14px; padding: 12px 14px; }
-    #quiz legend { padding: 0 6px; }
-    #quiz label { display: block; margin: 8px 0; }
-    #quiz input[type="text"] { width: 100%; box-sizing: border-box; margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid #3a4250; background: #1c222c; color: #f6f3ec; }
-    #quiz button { margin-top: 8px; border: 0; border-radius: 999px; padding: 10px 16px; background: #f6f3ec; color: #14181f; font-weight: 700; cursor: pointer; }
+    #quiz.overlay { display: flex; position: fixed; inset: 0; z-index: 8; align-items: center; justify-content: center; padding: 24px; background: rgba(8, 10, 14, 0.72); }
+    #quiz .quiz-panel { display: grid; gap: 14px; }
+    #quiz.overlay .quiz-panel { width: min(560px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 22px; border-radius: 16px; background: #1c222c; border: 1px solid rgba(246, 243, 236, 0.14); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); }
+    #quiz h2 { font-family: Georgia, "Iowan Old Style", serif; font-size: 1.25rem; font-weight: 600; margin: 0; }
+    #quiz fieldset { border: 0; margin: 0; padding: 0; }
+    #quiz legend { padding: 0; font-weight: 650; }
+    #quiz .choices { display: grid; gap: 8px; }
+    #quiz .choice { display: flex; gap: 10px; align-items: center; margin: 0; padding: 12px 14px; border: 1px solid rgba(246, 243, 236, 0.16); border-radius: 12px; background: rgba(255, 255, 255, 0.04); cursor: pointer; }
+    #quiz .choice.picked { border-color: #8fd0b4; background: rgba(14, 107, 86, 0.45); }
+    #quiz .choice input { accent-color: #8fd0b4; }
+    #quiz .quiz-note { margin: 0; color: #d5d0c6; }
+    #quiz input[type="text"] { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid #3a4250; background: #14181f; color: #f6f3ec; }
+    #quiz button { justify-self: start; border: 0; border-radius: 999px; padding: 10px 16px; background: #f6f3ec; color: #14181f; font-weight: 700; cursor: pointer; }
     #quiz button:disabled { opacity: 0.6; cursor: default; }
     #status { font-family: "Segoe UI", sans-serif; color: #d5d0c6; font-size: 0.92rem; }
   </style>

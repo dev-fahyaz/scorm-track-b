@@ -29,6 +29,12 @@ interface MediaControls {
   seek(seconds: number): void;
 }
 
+function secondsAt(value: unknown): number | null {
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  if (!Number.isInteger(number) || number < 0 || number > 86400) return null;
+  return number;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
@@ -49,7 +55,7 @@ function readQuestion(entry: unknown, withTime: boolean): PlayQuestion {
     ? raw.kind
     : "choice";
   const prompt = typeof raw.prompt === "string" ? raw.prompt : "";
-  const at = withTime && Number.isInteger(raw.at) && Number(raw.at) >= 0 ? Number(raw.at) : null;
+  const at = withTime ? secondsAt(raw.at) : null;
   if (kind === "fill-in") {
     const answers = Array.isArray(raw.answers) ? raw.answers.map((answer) => String(answer)) : [];
     return { kind, prompt, choices: [], correctIndexes: [], answers, at };
@@ -136,10 +142,46 @@ function storedResponse(question: PlayQuestion, answer: SubmittedAnswer): string
   return answer.indexes.join(".");
 }
 
+export function reviewFromMarks(
+  questions: PlayQuestion[],
+  saved: string
+): { answers: SubmittedAnswer[]; score: number; correct: number } | null {
+  const marks = decodeMarks(saved, questions.length);
+  if (!questions.length || marks.some((mark) => mark.state === ".")) return null;
+  const answers = questions.map((question, index) => answerFromMark(question, marks[index].response));
+  const correct = marks.filter((mark) => mark.state === "1").length;
+  return { answers, score: Math.round((correct / questions.length) * 100), correct };
+}
+
+export function marksForAnswers(questions: PlayQuestion[], answers: SubmittedAnswer[]): StoredMark[] {
+  return answers.map((answer, index) => ({
+    state: grade(questions[index], answer) ? "1" : "0",
+    response: storedResponse(questions[index], answer),
+  }));
+}
+
 function fieldMessage(text: string): HTMLParagraphElement {
   const message = document.createElement("p");
+  message.className = "quiz-note";
   message.textContent = text;
   return message;
+}
+
+function showOverlay(root: HTMLElement): void {
+  root.classList.add("on", "overlay");
+}
+
+function panelHost(root: HTMLElement): HTMLElement {
+  const existing = root.querySelector<HTMLElement>(".quiz-panel");
+  if (existing) return existing;
+  const box = document.createElement("div");
+  box.className = "quiz-panel";
+  root.append(box);
+  return box;
+}
+
+function hideOverlay(root: HTMLElement): void {
+  root.classList.remove("on", "overlay");
 }
 
 function submitButton(label: string): HTMLButtonElement {
@@ -149,17 +191,31 @@ function submitButton(label: string): HTMLButtonElement {
   return button;
 }
 
-function choiceControls(question: PlayQuestion, index: number): HTMLElement {
+function markPicked(group: HTMLElement): void {
+  group.querySelectorAll<HTMLLabelElement>("label.choice").forEach((label) => {
+    const input = label.querySelector("input");
+    label.classList.toggle("picked", Boolean(input?.checked));
+  });
+}
+
+function choiceControls(question: PlayQuestion, index: number, selected: number[]): HTMLElement {
   const group = document.createElement("div");
+  group.className = "choices";
   question.choices.forEach((choice, choiceIndex) => {
     const label = document.createElement("label");
+    label.className = "choice";
     const input = document.createElement("input");
     input.type = question.kind === "multi" ? "checkbox" : "radio";
     input.name = `q-${index}`;
     input.value = String(choiceIndex);
-    label.append(input, document.createTextNode(` ${choice}`));
+    input.checked = selected.includes(choiceIndex);
+    const text = document.createElement("span");
+    text.textContent = choice;
+    label.append(input, text);
+    input.addEventListener("change", () => markPicked(group));
     group.append(label);
   });
+  markPicked(group);
   return group;
 }
 
@@ -174,7 +230,12 @@ function readAnswer(form: HTMLFormElement, question: PlayQuestion, index: number
   return { indexes: selected.map((input) => Number(input.value)), text: "" };
 }
 
-function appendQuestion(form: HTMLFormElement, question: PlayQuestion, index: number): void {
+function appendQuestion(
+  form: HTMLFormElement,
+  question: PlayQuestion,
+  index: number,
+  initial?: SubmittedAnswer
+): void {
   const fieldset = document.createElement("fieldset");
   const legend = document.createElement("legend");
   legend.textContent = question.prompt;
@@ -184,29 +245,49 @@ function appendQuestion(form: HTMLFormElement, question: PlayQuestion, index: nu
     input.type = "text";
     input.name = `q-${index}`;
     input.autocomplete = "off";
+    input.placeholder = "Your answer";
+    if (initial?.text) input.value = initial.text;
     fieldset.append(input);
   } else {
-    fieldset.append(choiceControls(question, index));
+    fieldset.append(choiceControls(question, index, initial?.indexes || []));
   }
   form.append(fieldset);
 }
 
+export interface MountQuizOptions {
+  title?: string;
+  initial?: SubmittedAnswer[];
+  locked?: boolean;
+  note?: string;
+}
+
 export function mountQuiz(
   root: HTMLElement,
-  title: string,
   questions: PlayQuestion[],
-  onSubmit: (result: QuizResult) => void
+  onSubmit: (result: QuizResult) => void,
+  options?: MountQuizOptions
 ): void {
   root.replaceChildren();
-  const heading = document.createElement("h2");
-  heading.textContent = title;
   const form = document.createElement("form");
-  const message = fieldMessage("");
-  questions.forEach((question, index) => appendQuestion(form, question, index));
+  form.className = "quiz-panel";
+  const message = fieldMessage(options?.note || "");
+  if (options?.title) {
+    const heading = document.createElement("h2");
+    heading.textContent = options.title;
+    form.append(heading);
+  }
+  questions.forEach((question, index) => appendQuestion(form, question, index, options?.initial?.[index]));
   const button = submitButton("Submit quiz");
   form.append(message, button);
+  if (options?.locked) {
+    form.querySelectorAll<HTMLInputElement>("input").forEach((input) => {
+      input.disabled = true;
+    });
+    button.disabled = true;
+  }
   form.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (options?.locked) return;
     const answers: SubmittedAnswer[] = [];
     for (let index = 0; index < questions.length; index += 1) {
       const answer = readAnswer(form, questions[index], index);
@@ -223,9 +304,12 @@ export function mountQuiz(
     const score = Math.round((correct / questions.length) * 100);
     message.textContent = `Score ${score}. ${correct} of ${questions.length} correct.`;
     button.disabled = true;
+    form.querySelectorAll<HTMLInputElement>("input").forEach((input) => {
+      input.disabled = true;
+    });
     onSubmit({ score, answers, interactions });
   });
-  root.append(heading, form);
+  root.append(form);
 }
 
 export function mountPrompt(
@@ -235,10 +319,12 @@ export function mountPrompt(
   onAnswer: (answer: SubmittedAnswer) => void
 ): void {
   root.replaceChildren();
+  const form = document.createElement("form");
+  form.className = "quiz-panel";
   const heading = document.createElement("h2");
   heading.textContent = label;
-  const form = document.createElement("form");
   const message = fieldMessage("");
+  form.append(heading);
   appendQuestion(form, question, 0);
   form.append(message, submitButton("Continue"));
   form.addEventListener("submit", (event) => {
@@ -250,7 +336,7 @@ export function mountPrompt(
     }
     onAnswer(answer);
   });
-  root.append(heading, form);
+  root.append(form);
 }
 
 export interface CheckpointSession {
@@ -300,19 +386,20 @@ export function createCheckpointSession(options: {
   const showRetry = (score: number) => {
     locked = true;
     options.media.pause();
-    options.root.classList.add("on");
+    showOverlay(options.root);
     const note = fieldMessage(
       `Score ${score}. Mastery is ${options.mastery}. This item stays incomplete until the quiz is passed.`
     );
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = "Retry questions";
+    const host = panelHost(options.root);
     button.addEventListener("click", () => {
       marks = options.questions.map(() => ({ state: ".", response: "" }));
       ended = false;
       locked = false;
       activeIndex = null;
-      options.root.classList.remove("on");
+      hideOverlay(options.root);
       options.root.replaceChildren();
       options.onChange();
       const firstTimed = options.questions.findIndex((question) => question.at != null);
@@ -323,7 +410,7 @@ export function createCheckpointSession(options: {
       ended = true;
       revealEnd(options.questions.map((_, index) => index));
     });
-    options.root.append(note, button);
+    host.append(note, button);
   };
 
   const afterAnswer = () => {
@@ -346,7 +433,7 @@ export function createCheckpointSession(options: {
     activeIndex = index;
     options.media.pause();
     if (question.at != null) options.media.seek(question.at);
-    options.root.classList.add("on");
+    showOverlay(options.root);
     mountPrompt(
       options.root,
       question,
@@ -356,7 +443,7 @@ export function createCheckpointSession(options: {
         marks[index] = { state: correct ? "1" : "0", response: storedResponse(question, answer) };
         locked = false;
         activeIndex = null;
-        options.root.classList.remove("on");
+        hideOverlay(options.root);
         options.root.replaceChildren();
         afterAnswer();
       }
@@ -367,9 +454,9 @@ export function createCheckpointSession(options: {
     locked = true;
     activeIndex = null;
     options.media.pause();
-    options.root.classList.add("on");
+    showOverlay(options.root);
     const slice = indexes.map((index) => options.questions[index]);
-    mountQuiz(options.root, "Check your understanding", slice, (result) => {
+    mountQuiz(options.root, slice, (result) => {
       result.answers.forEach((answer, offset) => {
         const index = indexes[offset];
         marks[index] = {
@@ -385,7 +472,7 @@ export function createCheckpointSession(options: {
       }
       locked = false;
       afterAnswer();
-    });
+    }, { title: "Check your understanding" });
   };
 
   const nextTimed = (current: number): number | null => {

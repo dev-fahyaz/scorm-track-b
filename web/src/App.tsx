@@ -368,7 +368,7 @@ export function App() {
         <section>
           <h2>Course structure</h2>
           <p className="section-note">
-            A lesson with one sub-lesson is a single launch file. A lesson with more becomes a folder of launch files. No sequencing rules.
+            A lesson with one sub-lesson is a single launch file. A lesson with more becomes a folder of launch files. Each later file stays locked until the one before it is passed.
           </p>
           <ul className="tree">
             <li>
