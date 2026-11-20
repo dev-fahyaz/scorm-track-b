@@ -31,4 +31,4 @@ process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
 start("node", ["server/index.js"]);
-start("npm", ["run", "dev", "--prefix", "web"]);
+start("npm", ["run", "dev", "--prefix", "frontend"]);

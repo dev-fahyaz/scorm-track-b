@@ -1,4 +1,4 @@
-import type { DraftResult, PackageForm, PackageRequest } from "./types";
+import type { DeckSlide, DraftResult, PackageForm, PackageRequest } from "./types";
 
 async function readError(response: Response, fallback: string): Promise<never> {
   let message = fallback;
@@ -24,7 +24,9 @@ export async function draftCourse(body: PackageRequest): Promise<DraftResult> {
         items: lesson.items.map((item) =>
           item.type === "quiz"
             ? { type: "quiz", title: item.title }
-            : { type: "video", title: item.title, url: item.url }
+            : item.type === "deck"
+              ? { type: "deck", title: item.title, deckId: item.deckId }
+              : { type: "video", title: item.title, url: item.url }
         ),
       })),
     }),
@@ -64,6 +66,25 @@ export async function buildPackage(
   const match = /filename="([^"]+)"/.exec(header);
   const blob = await response.blob();
   return { blob, filename: match?.[1] || "course.zip" };
+}
+
+export async function uploadPresentation(file: File): Promise<{
+  deckId: string;
+  title: string;
+  slides: DeckSlide[];
+}> {
+  const response = await fetch("/api/presentations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "X-Deck-Name": file.name,
+    },
+    body: file,
+  });
+  if (!response.ok) {
+    return readError(response, `The presentation could not be read (${response.status}).`);
+  }
+  return (await response.json()) as { deckId: string; title: string; slides: DeckSlide[] };
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {

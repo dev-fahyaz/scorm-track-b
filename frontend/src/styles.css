@@ -291,7 +291,7 @@ input[aria-invalid="true"], textarea[aria-invalid="true"] {
 
 .button-row { display: flex; gap: 10px; flex-wrap: wrap; }
 
-button.secondary, button.text-button {
+button.secondary, button.text-button, label.text-button {
   border: 1px solid var(--line);
   background: #fff;
   border-radius: 999px;
@@ -300,8 +300,8 @@ button.secondary, button.text-button {
   cursor: pointer;
 }
 
-button.text-button { padding: 10px 14px; font-weight: 650; }
-button.secondary:hover, button.text-button:hover { border-color: var(--accent); }
+button.text-button, label.text-button { padding: 10px 14px; font-weight: 650; display: inline-block; }
+button.secondary:hover, button.text-button:hover, label.text-button:hover { border-color: var(--accent); }
 button.secondary:disabled, button.text-button:disabled { cursor: not-allowed; opacity: 0.6; }
 
 button[type="submit"] {

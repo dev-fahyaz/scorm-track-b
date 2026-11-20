@@ -1,9 +1,3 @@
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const fse = require("fs-extra");
-const buildPackage = require("../lib/index.js");
-
 const VERSIONS = new Set(["1.2", "2004 3rd Edition", "2004 4th Edition"]);
 const DURATION = /^PT(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?$/;
 const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
@@ -86,12 +80,18 @@ function lessonErrors(lessons, options) {
     const items = lesson && Array.isArray(lesson.items) ? lesson.items : null;
     const label = `Lesson ${lessonIndex + 1}`;
     if (!items || items.length === 0) {
-      errors.push(`${label} needs a video or a quiz.`);
+      errors.push(`${label} needs a video, a quiz, or a slide deck.`);
       return;
     }
     items.forEach((item, itemIndex) => {
-      const kind = item && item.type === "quiz" ? "quiz" : "video";
+      const kind = item && item.type === "quiz" ? "quiz" : item && item.type === "deck" ? "deck" : "video";
       const itemLabel = `${label} ${kind} ${itemIndex + 1}`;
+      if (kind === "deck") {
+        if (!item.deckId || typeof item.deckId !== "string") {
+          errors.push(`${itemLabel} needs a PowerPoint upload.`);
+        }
+        return;
+      }
       if (kind === "video") {
         const url = item && typeof (item.url || item.videoUrl) === "string"
           ? String(item.url || item.videoUrl).trim()
@@ -180,10 +180,14 @@ function normalizeLessons(lessons) {
   return lessons.map((lesson, lessonIndex) => {
     const sourceItems = Array.isArray(lesson.items) ? lesson.items : [];
     const items = sourceItems.map((item, itemIndex) => {
-      const type = item && item.type === "quiz" ? "quiz" : "video";
+      const type = item && item.type === "quiz" ? "quiz" : item && item.type === "deck" ? "deck" : "video";
       const href = itemHref(lessonIndex + 1, itemIndex + 1, sourceItems.length);
-      const fallback = type === "quiz" ? `Quiz ${itemIndex + 1}` : `Video ${itemIndex + 1}`;
+      const fallback = type === "quiz" ? `Quiz ${itemIndex + 1}` : type === "deck" ? `Slides ${itemIndex + 1}` : `Video ${itemIndex + 1}`;
       const title = (item && String(item.title || "").trim()) || fallback;
+      if (type === "deck") {
+        const slides = Array.isArray(item.slides) ? item.slides : [];
+        return { type, title, href, deckId: String((item && item.deckId) || ""), slides };
+      }
       const questions = (item && Array.isArray(item.questions) ? item.questions : [])
         .map((question) => normalizeQuestion(question, type === "video"));
       if (type === "quiz") return { type, title, href, questions };
@@ -269,198 +273,5 @@ function validate(body) {
   return errors;
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
-function courseHtml(title, lessonIndex, itemIndex) {
-  const safe = escapeHtml(title);
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="referrer" content="strict-origin-when-cross-origin" />
-  <title>${safe}</title>
-  <style>
-    body { margin: 0; background: #14181f; color: #f6f3ec; font-family: Georgia, "Iowan Old Style", serif; }
-    main { max-width: 960px; margin: 0 auto; padding: 28px 16px 48px; }
-    h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 14px; }
-    video { width: 100%; background: #000; border-radius: 10px; }
-    video.off, #youtube-frame, #quiz { display: none; }
-    #youtube-frame.on { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; }
-    #youtube-frame iframe { width: 100%; height: 100%; border: 0; }
-    #quiz.on { display: block; font-family: "Segoe UI", sans-serif; }
-    #quiz.overlay { display: flex; position: fixed; inset: 0; z-index: 8; align-items: center; justify-content: center; padding: 24px; background: rgba(8, 10, 14, 0.72); }
-    #quiz .quiz-panel { display: grid; gap: 14px; }
-    #quiz.overlay .quiz-panel { width: min(560px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 22px; border-radius: 16px; background: #1c222c; border: 1px solid rgba(246, 243, 236, 0.14); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); }
-    #quiz h2 { font-family: Georgia, "Iowan Old Style", serif; font-size: 1.25rem; font-weight: 600; margin: 0; }
-    #quiz fieldset { border: 0; margin: 0; padding: 0; }
-    #quiz legend { padding: 0; font-weight: 650; }
-    #quiz .choices { display: grid; gap: 8px; }
-    #quiz .choice { display: flex; gap: 10px; align-items: center; margin: 0; padding: 12px 14px; border: 1px solid rgba(246, 243, 236, 0.16); border-radius: 12px; background: rgba(255, 255, 255, 0.04); cursor: pointer; }
-    #quiz .choice.picked { border-color: #8fd0b4; background: rgba(14, 107, 86, 0.45); }
-    #quiz .choice input { accent-color: #8fd0b4; }
-    #quiz .quiz-note { margin: 0; color: #d5d0c6; }
-    #quiz input[type="text"] { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid #3a4250; background: #14181f; color: #f6f3ec; }
-    #quiz button { justify-self: start; border: 0; border-radius: 999px; padding: 10px 16px; background: #f6f3ec; color: #14181f; font-weight: 700; cursor: pointer; }
-    #quiz button:disabled { opacity: 0.6; cursor: default; }
-    #status { font-family: "Segoe UI", sans-serif; color: #d5d0c6; font-size: 0.92rem; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${safe}</h1>
-    <video id="lesson" controls playsinline preload="metadata"></video>
-    <div id="youtube-frame"><div id="youtube"></div></div>
-    <div id="quiz"></div>
-    <p id="status">Loading lesson…</p>
-  </main>
-  <script>window.LESSON_INDEX = ${Number(lessonIndex)};window.ITEM_INDEX = ${Number(itemIndex)};</script>
-  <script src="player.js"></script>
-</body>
-</html>
-`;
-}
-
-function directorySize(dir) {
-  let total = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    total += entry.isDirectory() ? directorySize(full) : fs.statSync(full).size;
-  }
-  return total;
-}
-
-function buildPackageAsync(config) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(Object.assign(new Error("Packager timed out."), { status: 500 }));
-    }, 30000);
-    try {
-      buildPackage(config, (message) => {
-        clearTimeout(timer);
-        resolve(message);
-      });
-    } catch (error) {
-      clearTimeout(timer);
-      reject(error);
-    }
-  });
-}
-
-async function buildCourse(body, playerFile) {
-  const errors = validate(body);
-  if (errors.length) {
-    throw Object.assign(new Error(errors.join(" ")), { status: 400 });
-  }
-
-  const root = path.join(os.tmpdir(), "scorm-track-b", `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  const source = path.join(root, "course");
-  const outputFolder = path.join(root, "out");
-
-  try {
-    const lessons = normalizeLessons(body.lessons);
-    await fse.ensureDir(source);
-    await fse.copy(playerFile, path.join(source, "player.js"));
-    for (let lessonIndex = 0; lessonIndex < lessons.length; lessonIndex += 1) {
-      const items = lessons[lessonIndex].items;
-      for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
-        const item = items[itemIndex];
-        await fse.writeFile(
-          path.join(source, item.href),
-          courseHtml(item.title, lessonIndex, itemIndex),
-          "utf8"
-        );
-      }
-    }
-
-    let poster = null;
-    if (body.posterDataUrl) {
-      const match = POSTER.exec(body.posterDataUrl);
-      const ext = match[1] === "image/png" ? "png" : match[1] === "image/webp" ? "webp" : "jpg";
-      poster = `poster.${ext}`;
-      await fse.writeFile(
-        path.join(source, poster),
-        Buffer.from(match[2].replace(/\s/g, ""), "base64")
-      );
-    }
-
-    const pkg = body.package;
-    const keywords = Array.isArray(pkg.keywords)
-      ? pkg.keywords.map((word) => String(word).trim()).filter(Boolean)
-      : [];
-    const vcard = pkg.vcard || {};
-    const config = {
-      version: body.version,
-      language: body.language.trim(),
-      organization: body.organization.trim(),
-      title: body.title.trim(),
-      identifier: body.identifier.trim(),
-      masteryScore: body.masteryScore,
-      startingPage: lessons[0].items[0].href,
-      lessons: lessons.map((lesson) => ({
-        title: lesson.title,
-        items: lesson.items.map((item) => ({
-          title: item.title,
-          href: item.href,
-          type: item.type,
-        })),
-      })),
-      source,
-      package: {
-        name: (pkg.name && String(pkg.name).trim()) || body.title.trim(),
-        author: pkg.author || "",
-        description: pkg.description || "",
-        organization: body.organization.trim(),
-        version: String(pkg.version).trim(),
-        duration: String(pkg.duration).trim(),
-        typicalDuration: String(pkg.typicalDuration).trim(),
-        rights: pkg.rights || "",
-        keywords,
-        zip: true,
-        appendTimeToOutput: false,
-        outputFolder,
-        size: String(directorySize(source) || 1),
-        vcard: {
-          author: vcard.author || pkg.author || "",
-          org: vcard.org || "",
-          tel: vcard.tel || "",
-          address: vcard.address || "",
-          mail: vcard.mail || "",
-          url: vcard.url || "",
-        },
-      },
-    };
-
-    const courseConfig = {
-      title: config.title,
-      identifier: config.identifier,
-      version: config.version,
-      lessons,
-      completionThreshold: body.completionThreshold / 100,
-      masteryScore: body.masteryScore,
-      requireQuizPass: body.requireQuizPass,
-      poster,
-    };
-    await fse.writeFile(path.join(source, "config.json"), JSON.stringify(courseConfig, null, 2), "utf8");
-
-    await buildPackageAsync(config);
-
-    const zips = (await fse.readdir(outputFolder)).filter((name) => name.endsWith(".zip"));
-    if (!zips.length) {
-      throw Object.assign(new Error("The packager did not write a zip."), { status: 500 });
-    }
-    const filename = zips[0].replace(/["\r\n]/g, "");
-    const buffer = await fse.readFile(path.join(outputFolder, zips[0]));
-    return { filename, buffer };
-  } finally {
-    await fse.remove(root).catch(() => {});
-  }
-}
-
-module.exports = { buildCourse, validate, lessonErrors, normalizeLessons };
+module.exports = { lessonErrors, validate, normalizeLessons, POSTER };

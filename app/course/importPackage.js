@@ -1,4 +1,7 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const AdmZip = require("adm-zip");
 
 const VERSIONS = new Set(["1.2", "2004 3rd Edition", "2004 4th Edition"]);
@@ -176,7 +179,43 @@ function blankVideo() {
   return { id: crypto.randomUUID(), type: "video", title: "", url: "", questions: [] };
 }
 
-function formLessons(lessons) {
+function findBySuffix(zip, suffix) {
+  const wanted = String(suffix || "").replace(/\\/g, "/");
+  return zip.getEntries().find((entry) => {
+    const name = entryName(entry);
+    return name && !name.includes("..") && name.endsWith(wanted);
+  });
+}
+
+function deckFromZip(zip, item, saveDeck) {
+  const slides = Array.isArray(item.slides) ? item.slides : [];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scorm-deck-"));
+  fs.mkdirSync(path.join(dir, "slides"), { recursive: true });
+  const stored = slides.map((slide, index) => {
+    const image = slide && typeof slide.image === "string" ? slide.image : "";
+    const base = path.basename(image) || `slide-${index + 1}.jpg`;
+    const entry = image ? findBySuffix(zip, image) : null;
+    if (entry) {
+      if (entry.header.size > 8 * 1024 * 1024) throw fail("A slide image is larger than 8 MB.");
+      fs.writeFileSync(path.join(dir, "slides", base), entry.getData());
+    }
+    return {
+      title: String((slide && slide.title) || `Slide ${index + 1}`),
+      notes: String((slide && slide.notes) || ""),
+      image: `slides/${base}`,
+      links: Array.isArray(slide && slide.links) ? slide.links : [],
+    };
+  });
+  fs.writeFileSync(path.join(dir, "deck.json"), JSON.stringify({
+    title: String(item.title || ""),
+    width: Number(item.width) || 0,
+    height: Number(item.height) || 0,
+    slides: stored,
+  }));
+  return typeof saveDeck === "function" ? saveDeck({ dir }) : "";
+}
+
+function formLessons(lessons, zip, saveDeck) {
   const source = Array.isArray(lessons) ? lessons : [];
   const groups = source.map((lesson) => {
     const rawItems = lesson && Array.isArray(lesson.items)
@@ -185,6 +224,19 @@ function formLessons(lessons) {
         ? [{ type: "video", title: lesson.title, url: lesson.url || lesson.videoUrl }]
         : [];
     const items = rawItems.map((item) => {
+      if (item && item.type === "deck") {
+        return {
+          id: crypto.randomUUID(),
+          type: "deck",
+          title: String(item.title || ""),
+          deckId: deckFromZip(zip, item, saveDeck),
+          slides: (Array.isArray(item.slides) ? item.slides : []).map((slide) => ({
+            title: String((slide && slide.title) || ""),
+            notes: String((slide && slide.notes) || ""),
+            links: Array.isArray(slide && slide.links) ? slide.links : [],
+          })),
+        };
+      }
       if (item && item.type === "quiz") {
         const questions = (Array.isArray(item.questions) ? item.questions : []).map((question) => (
           formQuestion(question, false)
@@ -233,7 +285,7 @@ function posterFromZip(zip, name) {
   };
 }
 
-function importPackage(buffer) {
+function importPackage(buffer, saveDeck) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
     throw fail("Choose a zip file.");
   }
@@ -290,7 +342,7 @@ function importPackage(buffer) {
     vcardAddress: metadata.vcardAddress,
     vcardMail: metadata.vcardMail,
     vcardUrl: metadata.vcardUrl,
-    lessons: formLessons(config.lessons),
+    lessons: formLessons(config.lessons, zip, saveDeck),
     note: "",
     completionThreshold,
     posterName: poster.posterName,

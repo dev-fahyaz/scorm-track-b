@@ -4,13 +4,13 @@
   "description": "Simple way to package your scorm projects",
   "main": "lib/index.js",
   "bin": {
-    "simple-scorm-packager": "./cli.js",
-    "scopackager": "./cli.js"
+    "simple-scorm-packager": "./lib/cli.js",
+    "scopackager": "./lib/cli.js"
   },
   "preferGlobal": true,
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "node scripts/dev.js",
+    "dev": "node server/dev.js",
     "start": "node server/index.js"
   },
   "repository": {

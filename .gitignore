@@ -1,6 +1,6 @@
 *.log
 node_modules
 test
-sco/dist
-web/dist
+app/player/dist
+frontend/dist
 .env

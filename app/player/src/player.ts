@@ -17,15 +17,17 @@ import {
   markSegment,
   watchedFraction,
 } from "./suspend";
+import { mountDeck, type DeckSlide } from "./deck";
 import { mountYouTube, youtubeId, type YouTubeHandle } from "./youtube";
 
 interface CourseItem {
-  type?: "video" | "quiz";
+  type?: "video" | "quiz" | "deck";
   title?: string;
   url?: string;
   videoUrl?: string;
   href?: string;
   questions?: unknown;
+  slides?: DeckSlide[];
 }
 
 interface CourseLesson {
@@ -236,7 +238,8 @@ async function main(): Promise<void> {
   const video = document.getElementById("lesson");
   const youtubeFrame = document.getElementById("youtube-frame");
   const quizRoot = document.getElementById("quiz");
-  if (!(video instanceof HTMLVideoElement) || !youtubeFrame || !quizRoot) {
+  const deckRoot = document.getElementById("deck");
+  if (!(video instanceof HTMLVideoElement) || !youtubeFrame || !quizRoot || !deckRoot) {
     setStatus("The lesson player is missing.");
     return;
   }
@@ -334,6 +337,32 @@ async function main(): Promise<void> {
       setStatus(adapter ? "Answer the questions." : "SCORM API not found. Answer the questions.");
     }
     present(review);
+    return;
+  }
+
+  if (item.type === "deck") {
+    video.classList.add("off");
+    const slides = Array.isArray(item.slides) ? item.slides : [];
+    if (!slides.length) {
+      setStatus("This deck has no slides.");
+      return;
+    }
+    const place = { current: 0 };
+    const watch = startWatch({
+      adapter,
+      kind: connected?.kind || null,
+      sessionStart,
+      threshold: Number(config.completionThreshold),
+      position: () => ({ current: place.current, duration: 100 }),
+    });
+    mountDeck({
+      root: deckRoot,
+      slides,
+      video,
+      youtubeFrame,
+      watch,
+      place,
+    });
     return;
   }
 

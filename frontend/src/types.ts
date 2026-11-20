@@ -34,7 +34,31 @@ export interface QuizItem {
   questions: QuizQuestion[];
 }
 
-export type LessonItem = VideoItem | QuizItem;
+export interface SlideLink {
+  text: string;
+  url: string;
+  type: "youtube" | "mp4" | "link";
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface DeckSlide {
+  title: string;
+  notes: string;
+  links: SlideLink[];
+}
+
+export interface DeckItem {
+  id: string;
+  type: "deck";
+  title: string;
+  deckId: string;
+  slides: DeckSlide[];
+}
+
+export type LessonItem = VideoItem | QuizItem | DeckItem;
 
 export interface LessonGroup {
   id: string;
@@ -80,10 +104,12 @@ export interface RequestQuestion {
 }
 
 export interface RequestItem {
-  type: "video" | "quiz";
+  type: "video" | "quiz" | "deck";
   title: string;
   url?: string;
   questions?: RequestQuestion[];
+  deckId?: string;
+  slides?: DeckSlide[];
 }
 
 export interface PackageRequest {
@@ -213,6 +239,16 @@ export function newQuiz(): QuizItem {
   return { id: newId(), type: "quiz", title: "", questions: [newQuestion()] };
 }
 
+export function newDeck(deck: { deckId: string; title: string; slides: DeckSlide[] }): DeckItem {
+  return {
+    id: newId(),
+    type: "deck",
+    title: deck.title,
+    deckId: deck.deckId,
+    slides: deck.slides,
+  };
+}
+
 export function newLesson(): LessonGroup {
   return { id: newId(), title: "", items: [newVideo()] };
 }
@@ -287,6 +323,14 @@ function requestQuestion(question: QuizQuestion, withTime: boolean): RequestQues
 }
 
 function requestItem(item: LessonItem): RequestItem {
+  if (item.type === "deck") {
+    return {
+      type: "deck",
+      title: item.title.trim(),
+      deckId: item.deckId,
+      slides: item.slides,
+    };
+  }
   if (item.type === "quiz") {
     return {
       type: "quiz",

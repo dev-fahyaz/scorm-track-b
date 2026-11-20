@@ -77,7 +77,7 @@ export function validateLessons(
   }
   form.lessons.forEach((lesson, lessonIndex) => {
     if (!lesson.items.length) {
-      errors[`lesson-items-${lessonIndex}`] = "Add a video or a quiz.";
+      errors[`lesson-items-${lessonIndex}`] = "Add a video, a quiz, or a slide deck.";
       return;
     }
     lesson.items.forEach((item, itemIndex) => {
@@ -86,6 +86,12 @@ export function validateLessons(
         if (!url || !httpsUrl(url)) {
           errors[`item-url-${lessonIndex}-${itemIndex}`] = "Enter an https file URL or a YouTube link.";
         }
+      }
+      if (item.type === "deck") {
+        if (!item.deckId || !item.slides.length) {
+          errors[`deck-${lessonIndex}-${itemIndex}`] = "Upload the PowerPoint file again.";
+        }
+        return;
       }
       if (!options?.quizzes) return;
       if (item.type === "quiz" && !item.questions.length) {

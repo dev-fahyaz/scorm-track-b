@@ -14,7 +14,8 @@ Install once from the repo root, then start the API and the dashboard together:
 
 ```bash
 npm install
-npm install --prefix web
+npm install --prefix frontend
+pip install -r app/ppt/requirements.txt
 npm run dev
 ```
 
@@ -24,7 +25,7 @@ Open http://localhost:5173/. The API listens on port 3001, and Vite proxies `/ap
 
 Copy `.env.example` to `.env` and set `OPENROUTER_API_KEY`. Drafts use OpenRouter auto unless `OPENROUTER_MODEL` is set. The key stays on the API. It is not sent to the browser.
 
-The form starts with lessons and the organization. Each lesson can hold videos and quizzes. A video is an https file URL or a YouTube link. An optional note tells the draft what the course is about. Titles, the description, keywords, durations, rights, the identifier, and the mastery score can be left blank. **Open zip** refills the form from a zip this dashboard built.
+The form starts with lessons and the organization. Each lesson can hold videos, quizzes, and a PowerPoint deck. **Add PowerPoint** reads a `.pptx` with PowerPoint installed on this machine, keeps the slide pictures on the server until build, and puts them in the zip. A deck is one launch file: the learner moves through the slides, notes, and hotspots. A YouTube or mp4 hotspot plays in the lesson player. Reaching the last slides completes the item by the same watch threshold as a video. A video is an https file URL or a YouTube link. An optional note tells the draft what the course is about. Titles, the description, keywords, durations, rights, the identifier, and the mastery score can be left blank. **Open zip** refills the form from a zip this dashboard built.
 
 **Draft course** fills those fields from OpenRouter. It uses the video URLs and the note. It does not invent quiz questions. The fields stay editable. **Build SCORM zip** uses the form as it stands, and drafts first when the title, identifier, or description is still empty.
 

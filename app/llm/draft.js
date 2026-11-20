@@ -1,4 +1,4 @@
-const { lessonErrors } = require("./build");
+const { lessonErrors } = require("../course/rules");
 
 const DURATION = /^PT(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?$/;
 const IDENTIFIER = /^[A-Za-z0-9._:-]+$/;
@@ -69,7 +69,7 @@ function extractJson(text) {
   return JSON.parse(body);
 }
 
-async function draftCourse(body) {
+async function draftCourse(body, options) {
   if (!body || typeof body !== "object") {
     throw Object.assign(new Error("Send the videos to draft."), { status: 400, expose: true });
   }
@@ -81,7 +81,7 @@ async function draftCourse(body) {
     throw Object.assign(new Error(urlErrors.join(" ")), { status: 400, expose: true });
   }
 
-  const key = process.env.OPENROUTER_API_KEY;
+  const key = options && options.apiKey;
   if (!key) {
     throw Object.assign(new Error("Set OPENROUTER_API_KEY in .env."), { status: 400, expose: true });
   }
@@ -89,13 +89,13 @@ async function draftCourse(body) {
   const lessons = body.lessons.map((lesson) => ({
     title: lesson && lesson.title ? String(lesson.title).trim() : "",
     videos: ((lesson && lesson.items) || [])
-      .filter((item) => !item || item.type !== "quiz")
+      .filter((item) => item && item.type !== "quiz" && item.type !== "deck")
       .map((item) => ({
         title: item && item.title ? String(item.title).trim() : "",
         videoUrl: String((item && (item.url || item.videoUrl)) || "").trim(),
       })),
   }));
-  const model = (process.env.OPENROUTER_MODEL || "").trim() || DEFAULT_MODEL;
+  const model = (options && options.model && String(options.model).trim()) || DEFAULT_MODEL;
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {

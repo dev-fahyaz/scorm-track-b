@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { buildPackage, downloadBlob, draftCourse, importPackage } from "./api";
+import { buildPackage, downloadBlob, draftCourse, importPackage, uploadPresentation } from "./api";
 import {
   applyDraft,
   emptyForm,
   itemHref,
   formatAt,
   joinAt,
+  newDeck,
   newLesson,
   newQuestion,
   newQuiz,
@@ -15,6 +16,7 @@ import {
   splitAt,
   toRequest,
   withKind,
+  type DeckItem,
   type LessonGroup,
   type LessonItem,
   type PackageForm,
@@ -30,8 +32,9 @@ const VERSIONS: ScormVersion[] = ["1.2", "2004 3rd Edition", "2004 4th Edition"]
 export function App() {
   const [form, setForm] = useState<PackageForm>(emptyForm);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<"draft" | "build" | "import" | null>(null);
+  const [busy, setBusy] = useState<"draft" | "build" | "import" | "slides" | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
+  const pptInputs = useRef<Record<string, HTMLInputElement | null>>({});
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
 
@@ -111,6 +114,33 @@ export function App() {
     } catch (error) {
       setFailed(true);
       setMessage(error instanceof Error ? error.message : "The zip could not be opened.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onSlides(lessonId: string, file: File | undefined) {
+    if (!file) return;
+    setBusy("slides");
+    setMessage("");
+    setFailed(false);
+    try {
+      const deck = await uploadPresentation(file);
+      updateLesson(lessonId, (current) => {
+        const blankOnly = current.items.length === 1
+          && current.items[0].type === "video"
+          && !current.items[0].url.trim();
+        const next = newDeck(deck);
+        return {
+          ...current,
+          title: current.title.trim() ? current.title : deck.title,
+          items: blankOnly ? [next] : [...current.items, next],
+        };
+      });
+      setMessage(`Read ${deck.slides.length} slides from ${file.name}.`);
+    } catch (error) {
+      setFailed(true);
+      setMessage(error instanceof Error ? error.message : "The presentation could not be read.");
     } finally {
       setBusy(null);
     }
@@ -202,7 +232,7 @@ export function App() {
         <section>
           <h2>Lessons</h2>
           <p className="section-note">
-            Each lesson can hold videos and quizzes. Add questions on a video to pause at a time, or add a quiz as its own launch file. Media stays on its host. The zip contains the player, not the video.
+            Each lesson can hold videos, quizzes, and a PowerPoint deck. Add questions on a video to pause at a time, or add a quiz as its own launch file. A deck is one launch file of slide pictures, notes, and links. Media stays on its host. The zip contains the player and the slide pictures, not the video.
           </p>
           <div className="file-row">
             <button
@@ -309,6 +339,27 @@ export function App() {
                   >
                     Add quiz
                   </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={busy !== null}
+                    onClick={() => pptInputs.current[lesson.id]?.click()}
+                  >
+                    {busy === "slides" ? "Reading…" : "Add PowerPoint"}
+                  </button>
+                  <input
+                    ref={(node) => {
+                      pptInputs.current[lesson.id] = node;
+                    }}
+                    type="file"
+                    accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    hidden
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      void onSlides(lesson.id, file);
+                    }}
+                  />
                 </div>
               </article>
             ))}
@@ -558,7 +609,7 @@ function SubLesson(props: {
   return (
     <div className="sublesson">
       <div className="lesson-head">
-        <p className="sublesson-label">{item.type === "quiz" ? "Quiz" : "Video"}</p>
+        <p className="sublesson-label">{item.type === "quiz" ? "Quiz" : item.type === "deck" ? "Slides" : "Video"}</p>
         <button
           type="button"
           className="text-button"
@@ -609,6 +660,14 @@ function SubLesson(props: {
             }
           />
         </>
+      ) : item.type === "deck" ? (
+        <DeckEditor
+          item={item}
+          lessonIndex={lessonIndex}
+          itemIndex={itemIndex}
+          error={props.errors[`deck-${lessonIndex}-${itemIndex}`]}
+          onChange={props.onChange}
+        />
       ) : (
         <QuizEditor
           item={item}
@@ -618,6 +677,64 @@ function SubLesson(props: {
           onChange={props.onChange}
         />
       )}
+    </div>
+  );
+}
+
+function DeckEditor(props: {
+  item: DeckItem;
+  lessonIndex: number;
+  itemIndex: number;
+  error?: string;
+  onChange: (change: (item: LessonItem) => LessonItem) => void;
+}) {
+  const { item, lessonIndex, itemIndex } = props;
+  return (
+    <div className="quiz-editor">
+      <Field label="Deck title" name={`deck-title-${lessonIndex}-${itemIndex}`} error={props.error}>
+        <input
+          id={`deck-title-${lessonIndex}-${itemIndex}`}
+          value={item.title}
+          onChange={(event) =>
+            props.onChange((current) => (current.type === "deck" ? { ...current, title: event.target.value } : current))
+          }
+        />
+      </Field>
+      <p className="hint">{item.slides.length} slides. Notes and titles are saved with the package.</p>
+      {item.slides.map((slide, slideIndex) => (
+        <div className="question" key={`${item.id}-${slideIndex}`}>
+          <Field label={`Slide ${slideIndex + 1}`} name={`slide-title-${lessonIndex}-${itemIndex}-${slideIndex}`}>
+            <input
+              id={`slide-title-${lessonIndex}-${itemIndex}-${slideIndex}`}
+              value={slide.title}
+              onChange={(event) =>
+                props.onChange((current) => {
+                  if (current.type !== "deck") return current;
+                  const slides = current.slides.map((entry, index) => (
+                    index === slideIndex ? { ...entry, title: event.target.value } : entry
+                  ));
+                  return { ...current, slides };
+                })
+              }
+            />
+          </Field>
+          <Field label="Notes" name={`slide-notes-${lessonIndex}-${itemIndex}-${slideIndex}`}>
+            <textarea
+              id={`slide-notes-${lessonIndex}-${itemIndex}-${slideIndex}`}
+              value={slide.notes}
+              onChange={(event) =>
+                props.onChange((current) => {
+                  if (current.type !== "deck") return current;
+                  const slides = current.slides.map((entry, index) => (
+                    index === slideIndex ? { ...entry, notes: event.target.value } : entry
+                  ));
+                  return { ...current, slides };
+                })
+              }
+            />
+          </Field>
+        </div>
+      ))}
     </div>
   );
 }
@@ -980,7 +1097,8 @@ function StructureNode(props: { lesson: LessonGroup; lessonIndex: number; manife
         Item <span className="muted">item_{manifest}{suffix}</span>
         <ul>
           <li>Title: {title}</li>
-          {item && item.questions.length ? <li>Questions: {item.questions.length}</li> : null}
+          {item && item.type !== "deck" && item.questions.length ? <li>Questions: {item.questions.length}</li> : null}
+          {item && item.type === "deck" ? <li>Slides: {item.slides.length}</li> : null}
           <li>Launch: {item ? itemHref(lessonIndex, 0, 1) : "—"}</li>
           <li>Resource: resource_{manifest}{suffix}</li>
         </ul>
@@ -995,13 +1113,14 @@ function StructureNode(props: { lesson: LessonGroup; lessonIndex: number; manife
         <li>Title: {lessonTitle}</li>
         {lesson.items.map((item, itemIndex) => {
           const child = `_${lessonIndex + 1}_${itemIndex + 1}`;
-          const title = item.title.trim() || (item.type === "quiz" ? `Quiz ${itemIndex + 1}` : `Video ${itemIndex + 1}`);
+          const title = item.title.trim() || (item.type === "quiz" ? `Quiz ${itemIndex + 1}` : item.type === "deck" ? `Slides ${itemIndex + 1}` : `Video ${itemIndex + 1}`);
           return (
             <li key={item.id}>
-              {item.type === "quiz" ? "Quiz" : "Video"} <span className="muted">item_{manifest}{child}</span>
+              {item.type === "quiz" ? "Quiz" : item.type === "deck" ? "Slides" : "Video"} <span className="muted">item_{manifest}{child}</span>
               <ul>
                 <li>Title: {title}</li>
-                {item.questions.length ? <li>Questions: {item.questions.length}</li> : null}
+                {item.type === "deck" ? <li>Slides: {item.slides.length}</li> : null}
+                {item.type !== "deck" && item.questions.length ? <li>Questions: {item.questions.length}</li> : null}
                 <li>Launch: {itemHref(lessonIndex, itemIndex, lesson.items.length)}</li>
                 <li>Resource: resource_{manifest}{child}</li>
               </ul>
