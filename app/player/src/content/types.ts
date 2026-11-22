@@ -42,6 +42,8 @@ export interface MountContext {
   setStatus: (text: string) => void;
   reportScore: (score: number, passed: boolean, complete: boolean, interactions?: InteractionRecord[]) => void;
   reportComplete: (complete: boolean) => void;
+  /** When false, completion does not request LMS continue (nested overlays). Default true. */
+  autoAdvance?: boolean;
 }
 
 export type MountResult = void | Promise<void>;

@@ -28,7 +28,11 @@ export function applyBackground(target: HTMLElement, specific: Record<string, un
   const bg = typeof specific.backgroundColor === "string" ? specific.backgroundColor : "";
   const color = typeof specific.textColor === "string" ? specific.textColor : "";
   if (bg && bg !== "#ffffff00") target.style.backgroundColor = bg;
-  if (color) target.style.color = color;
+  if (color) {
+    target.style.color = color;
+    target.style.setProperty("--ink", color);
+    target.style.setProperty("--muted", `color-mix(in srgb, ${color} 68%, transparent)`);
+  }
   const image = typeof specific.backgroundImage === "string" ? specific.backgroundImage.trim() : "";
   if (image) {
     target.style.backgroundImage = `url(${JSON.stringify(image).slice(1, -1)})`;

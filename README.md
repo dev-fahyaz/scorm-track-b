@@ -110,7 +110,7 @@ The form can also hold videos, quizzes, and a PowerPoint deck. **Add PowerPoint*
 
 **Draft course** fills those fields from OpenRouter. It uses the video URLs and the note. It does not invent quiz questions. The fields stay editable. **Build SCORM zip** uses the form as it stands, and drafts first when the title, identifier, or description is still empty.
 
-A lesson with one sub-lesson stays one launch file (`lesson-1.html`). A lesson with more than one becomes a folder, and each video or quiz is its own file (`lesson-1-1.html`, `lesson-1-2.html`). Each later file stays locked until the one before it is passed. Earlier files stay open for review. The zip root contains:
+A lesson with one sub-lesson stays one launch file (`lesson-1.html`). A lesson with more than one becomes a folder, and each video or quiz is its own file (`lesson-1-1.html`, `lesson-1-2.html`). Sequencing: SCORM 2004 maps each SCO's primary objective with `imsss:mapInfo` and disables later items until the previous objective is satisfied (passed); earlier items stay choosable for review. SCORM 1.2 emits `adlcp:prerequisites` (LMS completion semantics vary). The zip root contains:
 
 * `imsmanifest.xml`
 * `metadata.xml`

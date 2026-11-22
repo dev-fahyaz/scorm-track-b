@@ -33,6 +33,8 @@ export interface ScormAdapter {
   setScore(raw: number, min: number, max: number): void;
   setSessionTime(seconds: number): void;
   setInteractions(records: InteractionRecord[]): void;
+  canRequestContinue(): boolean;
+  requestContinue(): void;
   commit(): boolean;
   terminate(): boolean;
 }

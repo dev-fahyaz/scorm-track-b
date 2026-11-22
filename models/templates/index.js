@@ -20,7 +20,7 @@ function shellHtml(title, lessonIndex, itemIndex) {
 <body>
   <main>
     <h1>${safe}</h1>
-    <video id="lesson" controls playsinline preload="metadata"></video>
+    <video id="lesson" class="off" controls playsinline preload="metadata"></video>
     <div id="youtube-frame"><div id="youtube"></div></div>
     <div id="content"></div>
     <div id="quiz"></div>

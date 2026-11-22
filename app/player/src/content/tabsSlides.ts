@@ -12,7 +12,7 @@ export function mountTabs(ctx: MountContext): void {
   if (textOf(specific.paragraph)) block.append(el("p", { className: "body" }, textOf(specific.paragraph)));
 
   const nav = el("div", { className: "tab-nav" });
-  const body = el("div", { className: "body" });
+  const body = el("div", { className: "tab-body body" });
   let index = 0;
 
   function render() {
@@ -38,10 +38,9 @@ export function mountTabs(ctx: MountContext): void {
   block.append(nav, body);
   block.append(
     el("div", { className: "content-bar" }, (() => {
-      const button = el("button", { type: "button", className: "btn" }, "Continue");
+      const button = el("button", { type: "button", className: "btn btn-continue" }, "Continue");
       button.addEventListener("click", () => {
         ctx.reportComplete(true);
-        ctx.setStatus(`Completed. Reported to ${ctx.apiName}.`);
       });
       return button;
     })())
@@ -57,7 +56,7 @@ export function mountSliderShow(ctx: MountContext): void {
   ctx.root.classList.add("on");
   const block = el("div", { className: "content-block panel" });
   applyBackground(block, specific);
-  const stage = el("div", { className: "body" });
+  const stage = el("div", { className: "slide-stage body" });
   const dots = el("div", { className: "slide-dots" });
   let index = 0;
 
@@ -82,8 +81,8 @@ export function mountSliderShow(ctx: MountContext): void {
 
   render();
   const bar = el("div", { className: "content-bar" });
-  const prev = el("button", { type: "button", className: "btn" }, "Previous");
-  const next = el("button", { type: "button", className: "btn" }, "Next");
+  const prev = el("button", { type: "button", className: "btn btn-secondary" }, "Previous");
+  const next = el("button", { type: "button", className: "btn btn-continue" }, "Next");
   prev.addEventListener("click", () => {
     index = Math.max(0, index - 1);
     render();
@@ -91,7 +90,6 @@ export function mountSliderShow(ctx: MountContext): void {
   next.addEventListener("click", () => {
     if (index >= slides.length - 1) {
       ctx.reportComplete(true);
-      ctx.setStatus(`Completed. Reported to ${ctx.apiName}.`);
       return;
     }
     index += 1;

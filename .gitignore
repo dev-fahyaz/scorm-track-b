@@ -5,3 +5,5 @@ app/player/dist
 frontend/dist
 .env
 scripts/
+samples/
+tmp-smoke-*.zip

@@ -95,6 +95,14 @@ export class Scorm12Adapter implements ScormAdapter {
     });
   }
 
+  canRequestContinue(): boolean {
+    return false;
+  }
+
+  requestContinue(): void {
+    // SCORM 1.2 has no standard navigation request.
+  }
+
   commit(): boolean {
     return accepted(this.api.LMSCommit(""));
   }

@@ -13,7 +13,8 @@
     "dev": "node server/dev.js",
     "dev:ui": "npm run dev --prefix frontend",
     "start": "node server/index.js",
-    "smoke:content": "node scripts/smoke-content.js"
+    "smoke:content": "node scripts/smoke-content.js",
+    "sample:all": "node scripts/sample-all-content.js"
   },
   "repository": {
     "type": "git",

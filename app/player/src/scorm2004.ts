@@ -98,6 +98,22 @@ export class Scorm2004Adapter implements ScormAdapter {
     });
   }
 
+  canRequestContinue(): boolean {
+    try {
+      return this.api.GetValue("adl.nav.request_valid.continue") === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  requestContinue(): void {
+    try {
+      this.api.SetValue("adl.nav.request", "continue");
+    } catch {
+      // LMS may not support navigation requests.
+    }
+  }
+
   commit(): boolean {
     return accepted(this.api.Commit(""));
   }

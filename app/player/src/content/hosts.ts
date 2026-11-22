@@ -3,12 +3,18 @@ import type { CourseItem, MountContext } from "./types";
 
 function overlayItem(overlay: Record<string, unknown>): CourseItem {
   const body = asRecord(overlay.contentBody);
+  const bodyCommon = asRecord(body.common);
+  const bodySpecific = asRecord(body.specific);
+  const flatCommon = asRecord(overlay.common);
+  const flatSpecific = asRecord(overlay.specific);
+  const common = Object.keys(flatCommon).length ? flatCommon : bodyCommon;
+  const specific = Object.keys(flatSpecific).length ? flatSpecific : bodySpecific;
   return {
     type: "content",
-    contentType: textOf(overlay.contentType, asRecord(body.common).contentType as string),
-    title: textOf(asRecord(body.common).contentName as string, "Overlay"),
-    common: asRecord(body.common) as CourseItem["common"],
-    specific: asRecord(body.specific),
+    contentType: textOf(overlay.contentType, common.contentType as string),
+    title: textOf(common.contentName as string, "Overlay"),
+    common: common as CourseItem["common"],
+    specific,
   };
 }
 
@@ -42,6 +48,7 @@ export async function mountInteractiveContent(ctx: MountContext): Promise<void> 
       ...ctx,
       root: host,
       item,
+      autoAdvance: false,
       reportComplete: (complete) => {
         if (complete) {
           index += 1;
@@ -49,7 +56,13 @@ export async function mountInteractiveContent(ctx: MountContext): Promise<void> 
         }
       },
       reportScore: (score, passed, complete, interactions) => {
-        ctx.reportScore(score, passed, complete, interactions);
+        if (ctx.adapter) {
+          ctx.adapter.setScore(score, 0, 100);
+          if (interactions?.length) ctx.adapter.setInteractions(interactions);
+          ctx.adapter.setSuccess(passed);
+          ctx.adapter.commit();
+        }
+        ctx.setStatus(passed ? `Passed with ${score}.` : `Score ${score}.`);
         if (complete || overlay.canSkip) {
           index += 1;
           void showNext();
@@ -100,13 +113,20 @@ export async function mountInteractiveVideo(ctx: MountContext): Promise<void> {
       ...ctx,
       root: ctx.quizRoot,
       item,
+      autoAdvance: false,
       reportComplete: () => {
         ctx.quizRoot.classList.remove("on", "overlay");
         clear(ctx.quizRoot);
         void ctx.video.play();
       },
       reportScore: (score, passed, complete, interactions) => {
-        ctx.reportScore(score, passed, complete, interactions);
+        if (ctx.adapter) {
+          ctx.adapter.setScore(score, 0, 100);
+          if (interactions?.length) ctx.adapter.setInteractions(interactions);
+          ctx.adapter.setSuccess(passed);
+          ctx.adapter.commit();
+        }
+        ctx.setStatus(passed ? `Passed with ${score}.` : `Score ${score}.`);
         ctx.quizRoot.classList.remove("on", "overlay");
         clear(ctx.quizRoot);
         void ctx.video.play();

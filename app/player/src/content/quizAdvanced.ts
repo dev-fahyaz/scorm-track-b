@@ -76,6 +76,7 @@ export function mountOrdering(ctx: MountContext): void {
   panel.append(el("h2", {}, textOf(specific.question, ctx.item.title)));
   const list = el("div", { className: "order-list" });
   const state = order.slice();
+  let animating = false;
 
   function render(): void {
     list.replaceChildren();
@@ -83,25 +84,43 @@ export function mountOrdering(ctx: MountContext): void {
       const row = el("div", { className: "order-item" });
       const label = textOf(entry.option.optionText, entry.option.optionImageLink, `Item ${entry.index + 1}`);
       row.append(el("span", {}, `${position + 1}. ${label}`));
-      const up = el("button", { type: "button", className: "btn" }, "Up");
-      const down = el("button", { type: "button", className: "btn" }, "Down");
-      up.disabled = position === 0;
-      down.disabled = position === state.length - 1;
-      up.addEventListener("click", () => {
-        const swap = state[position - 1];
-        state[position - 1] = state[position];
-        state[position] = swap;
-        render();
-      });
-      down.addEventListener("click", () => {
-        const swap = state[position + 1];
-        state[position + 1] = state[position];
-        state[position] = swap;
-        render();
-      });
+      const up = el("button", { type: "button", className: "btn btn-secondary" }, "Up");
+      const down = el("button", { type: "button", className: "btn btn-secondary" }, "Down");
+      up.disabled = animating || position === 0;
+      down.disabled = animating || position === state.length - 1;
+      up.addEventListener("click", () => flipSwap(position, position - 1));
+      down.addEventListener("click", () => flipSwap(position, position + 1));
       row.append(up, down);
       list.append(row);
     });
+  }
+
+  function flipSwap(from: number, to: number): void {
+    if (animating || to < 0 || to >= state.length || from === to) return;
+    animating = true;
+    const before = [...list.children].map((node) => (node as HTMLElement).getBoundingClientRect());
+    const swap = state[from];
+    state[from] = state[to];
+    state[to] = swap;
+    render();
+    [...list.children].forEach((node, index) => {
+      const row = node as HTMLElement;
+      const after = row.getBoundingClientRect();
+      const dy = before[index].top - after.top;
+      if (!dy) return;
+      row.style.transition = "none";
+      row.style.transform = `translateY(${dy}px)`;
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          row.style.transition = "";
+          row.style.transform = "";
+        });
+      });
+    });
+    window.setTimeout(() => {
+      animating = false;
+      render();
+    }, 550);
   }
 
   render();

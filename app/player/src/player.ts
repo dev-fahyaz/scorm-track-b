@@ -237,7 +237,7 @@ function makeContentContext(options: {
   };
   window.addEventListener("pagehide", finish);
 
-  return {
+  const ctx: MountContext = {
     root: options.root,
     quizRoot: options.quizRoot,
     video: options.video,
@@ -250,8 +250,10 @@ function makeContentContext(options: {
     sessionStart: options.sessionStart,
     apiName: options.apiName,
     poster: options.poster,
+    autoAdvance: true,
     setStatus,
     reportScore(score, passed, complete, interactions) {
+      if (complete) disableContentButtons(options.root);
       if (options.adapter) {
         options.adapter.setScore(score, 0, 100);
         options.adapter.setProgress(score / 100);
@@ -260,22 +262,55 @@ function makeContentContext(options: {
         options.adapter.setCompletion(complete);
         options.adapter.setSessionTime((Date.now() - options.sessionStart) / 1000);
         options.adapter.commit();
+        if (complete && ctx.autoAdvance !== false) {
+          options.adapter.requestContinue();
+          options.adapter.terminate();
+          setStatus(`Score ${score}. Moving to the next item…`);
+          scheduleAdvanceFallback(setStatus, `Score ${score}. Use the LMS Next control if the course did not advance.`);
+          return;
+        }
       }
       if (passed) setStatus(`Passed with ${score}. Reported to ${options.apiName}.`);
       else if (complete) setStatus(`Score ${score}. Reported to ${options.apiName}.`);
       else setStatus(`Score ${score}. Mastery is ${options.mastery}. The item stays incomplete.`);
     },
     reportComplete(complete) {
+      if (complete) disableContentButtons(options.root);
       if (options.adapter) {
         options.adapter.setProgress(complete ? 1 : 0);
         options.adapter.setCompletion(complete);
         options.adapter.setSuccess(complete ? true : null);
         options.adapter.setSessionTime((Date.now() - options.sessionStart) / 1000);
         options.adapter.commit();
+        if (complete && ctx.autoAdvance !== false) {
+          options.adapter.requestContinue();
+          options.adapter.terminate();
+          setStatus("Completed. Moving to the next item…");
+          scheduleAdvanceFallback(
+            setStatus,
+            "Completed. Use the LMS Next control if the course did not advance."
+          );
+          return;
+        }
       }
-      if (complete) setStatus(`Completed. Reported to ${options.apiName}.`);
+      if (complete) {
+        setStatus(`Completed. Reported to ${options.apiName}.`);
+      }
     },
   };
+  return ctx;
+}
+
+function disableContentButtons(root: HTMLElement): void {
+  root.querySelectorAll("button").forEach((node) => {
+    (node as HTMLButtonElement).disabled = true;
+  });
+}
+
+function scheduleAdvanceFallback(setStatus: (message: string) => void, message: string): void {
+  window.setTimeout(() => {
+    if (document.visibilityState === "visible") setStatus(message);
+  }, 800);
 }
 
 function videoUrlOf(item: CourseItem): string {

@@ -483,7 +483,7 @@ export function App() {
         <section>
           <h2>Course structure</h2>
           <p className="section-note">
-            A lesson with one sub-lesson is a single launch file. A lesson with more becomes a folder of launch files. Each later file stays locked until the one before it is passed.
+            A lesson with one sub-lesson is a single launch file. A lesson with more becomes a folder of launch files. Later files stay disabled in the LMS outline until the previous one is passed (SCORM 2004 shared objectives; 1.2 uses prerequisites).
           </p>
           <ul className="tree">
             <li>

@@ -2,7 +2,7 @@ import { applyBackground, asRecord, clear, el, textOf } from "./dom";
 import type { MountContext } from "./types";
 
 function continueButton(onDone: () => void): HTMLButtonElement {
-  const button = el("button", { type: "button", className: "btn" }, "Continue");
+  const button = el("button", { type: "button", className: "btn btn-continue" }, "Continue");
   button.addEventListener("click", onDone);
   return button;
 }
@@ -26,7 +26,6 @@ export function mountText(ctx: MountContext): void {
   block.append(
     continueButton(() => {
       ctx.reportComplete(true);
-      ctx.setStatus(`Completed. Reported to ${ctx.apiName}.`);
     })
   );
   ctx.root.append(block);
@@ -52,7 +51,6 @@ export function mountLink(ctx: MountContext): void {
   block.append(
     continueButton(() => {
       ctx.reportComplete(true);
-      ctx.setStatus(`Completed. Reported to ${ctx.apiName}.`);
     })
   );
   ctx.root.append(block);
@@ -72,12 +70,9 @@ export function mountPdf(ctx: MountContext): void {
     block.append(
       el("a", { className: "cta", href: link, target: "_blank", rel: "noopener noreferrer" }, textOf(specific.pdfFileName, "Open PDF"))
     );
-    const frame = el("iframe", {
-      src: link,
-      title: "PDF",
-      style: "width:100%;min-height:60vh;border:0;border-radius:10px;background:#000;",
-    });
-    block.append(frame);
+    block.append(
+      el("p", { className: "muted" }, "The PDF opens in a new tab. Embedded preview is skipped so hosts that block iframes do not show an error.")
+    );
   } else {
     block.append(el("p", { className: "muted" }, "No PDF link was provided."));
   }
@@ -85,7 +80,6 @@ export function mountPdf(ctx: MountContext): void {
   block.append(
     continueButton(() => {
       ctx.reportComplete(true);
-      ctx.setStatus(`Completed. Reported to ${ctx.apiName}.`);
     })
   );
   ctx.root.append(block);
@@ -122,7 +116,6 @@ export function mountMarkdown(ctx: MountContext): void {
   block.append(
     continueButton(() => {
       ctx.reportComplete(true);
-      ctx.setStatus(`Completed. Reported to ${ctx.apiName}.`);
     })
   );
   ctx.root.append(block);
