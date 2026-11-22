@@ -1,3 +1,12 @@
+"use strict";
+
+const { isContentType } = require("../../models/contentTypes");
+const { validateContentItem, asRecord } = require("../../models/validate");
+const {
+  normalizeLessons: normalizeContentLessons,
+  videoUrlFromSpecific,
+} = require("./content/normalize");
+
 const VERSIONS = new Set(["1.2", "2004 3rd Edition", "2004 4th Edition"]);
 const DURATION = /^PT(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?$/;
 const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
@@ -69,6 +78,18 @@ function questionErrors(question, label) {
   return errors;
 }
 
+function isContentPayload(item) {
+  return Boolean(item && asRecord(item.common) && isContentType(item.common.contentType));
+}
+
+function itemKind(item) {
+  if (item && item.type === "deck") return "deck";
+  if (item && item.type === "quiz") return "quiz";
+  if (isContentPayload(item)) return "content";
+  if (item && item.type === "content") return "content";
+  return "video";
+}
+
 function lessonErrors(lessons, options) {
   const checkQuizzes = Boolean(options && options.quizzes);
   const errors = [];
@@ -80,18 +101,37 @@ function lessonErrors(lessons, options) {
     const items = lesson && Array.isArray(lesson.items) ? lesson.items : null;
     const label = `Lesson ${lessonIndex + 1}`;
     if (!items || items.length === 0) {
-      errors.push(`${label} needs a video, a quiz, or a slide deck.`);
+      errors.push(`${label} needs at least one content item.`);
       return;
     }
     items.forEach((item, itemIndex) => {
-      const kind = item && item.type === "quiz" ? "quiz" : item && item.type === "deck" ? "deck" : "video";
-      const itemLabel = `${label} ${kind} ${itemIndex + 1}`;
+      const kind = itemKind(item);
+      const itemLabel = `${label} item ${itemIndex + 1}`;
+
       if (kind === "deck") {
         if (!item.deckId || typeof item.deckId !== "string") {
           errors.push(`${itemLabel} needs a PowerPoint upload.`);
         }
         return;
       }
+
+      if (kind === "content") {
+        const contentType = item.common.contentType;
+        errors.push(...validateContentItem(item, itemLabel));
+        if (contentType === "VIDEO" || contentType === "ANIMATION") {
+          const url = videoUrlFromSpecific(item.specific);
+          if (!httpsUrl(url) && !/^https?:\/\//i.test(url)) {
+            errors.push(`${itemLabel} needs an https file URL or a YouTube link.`);
+          }
+        }
+        if (contentType === "QUIZ" && Array.isArray(item.questions) && checkQuizzes) {
+          item.questions.forEach((question, questionIndex) => {
+            errors.push(...questionErrors(question, `${itemLabel} question ${questionIndex + 1}`));
+          });
+        }
+        return;
+      }
+
       if (kind === "video") {
         const url = item && typeof (item.url || item.videoUrl) === "string"
           ? String(item.url || item.videoUrl).trim()
@@ -100,6 +140,7 @@ function lessonErrors(lessons, options) {
           errors.push(`${itemLabel} needs an https file URL or a YouTube link.`);
         }
       }
+
       if (!checkQuizzes) return;
       const questions = item && Array.isArray(item.questions) ? item.questions : [];
       if (kind === "quiz" && (!questions.length || questions.length > 20)) {
@@ -123,11 +164,6 @@ function lessonErrors(lessons, options) {
     });
   });
   return errors;
-}
-
-function itemHref(lessonNumber, itemNumber, count) {
-  if (count <= 1) return `lesson-${lessonNumber}.html`;
-  return `lesson-${lessonNumber}-${itemNumber}.html`;
 }
 
 function timeValue(value) {
@@ -177,33 +213,21 @@ function normalizeQuestion(question, withTime) {
 }
 
 function normalizeLessons(lessons) {
-  return lessons.map((lesson, lessonIndex) => {
-    const sourceItems = Array.isArray(lesson.items) ? lesson.items : [];
-    const items = sourceItems.map((item, itemIndex) => {
-      const type = item && item.type === "quiz" ? "quiz" : item && item.type === "deck" ? "deck" : "video";
-      const href = itemHref(lessonIndex + 1, itemIndex + 1, sourceItems.length);
-      const fallback = type === "quiz" ? `Quiz ${itemIndex + 1}` : type === "deck" ? `Slides ${itemIndex + 1}` : `Video ${itemIndex + 1}`;
-      const title = (item && String(item.title || "").trim()) || fallback;
-      if (type === "deck") {
-        const slides = Array.isArray(item.slides) ? item.slides : [];
-        return { type, title, href, deckId: String((item && item.deckId) || ""), slides };
+  const normalized = normalizeContentLessons(lessons);
+  return normalized.map((lesson) => ({
+    ...lesson,
+    items: lesson.items.map((item) => {
+      if (item.type === "deck") return item;
+      if (Array.isArray(item.questions)) {
+        const withTime = item.type === "video" || item.contentType === "VIDEO" || item.contentType === "ANIMATION";
+        return {
+          ...item,
+          questions: item.questions.map((question) => normalizeQuestion(question, withTime)),
+        };
       }
-      const questions = (item && Array.isArray(item.questions) ? item.questions : [])
-        .map((question) => normalizeQuestion(question, type === "video"));
-      if (type === "quiz") return { type, title, href, questions };
-      return {
-        type,
-        title,
-        href,
-        url: String((item && (item.url || item.videoUrl)) || "").trim(),
-        questions,
-      };
-    });
-    return {
-      title: (lesson && String(lesson.title || "").trim()) || `Lesson ${lessonIndex + 1}`,
-      items,
-    };
-  });
+      return item;
+    }),
+  }));
 }
 
 function validate(body) {
@@ -273,5 +297,4 @@ function validate(body) {
   return errors;
 }
 
-
-module.exports = { lessonErrors, validate, normalizeLessons, POSTER };
+module.exports = { lessonErrors, validate, normalizeLessons, POSTER, normalizeQuestion };

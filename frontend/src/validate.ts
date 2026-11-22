@@ -81,6 +81,12 @@ export function validateLessons(
       return;
     }
     lesson.items.forEach((item, itemIndex) => {
+      if (item.type === "content") {
+        if (!item.common?.contentType) {
+          errors[`content-${lessonIndex}-${itemIndex}`] = "Content item needs a contentType.";
+        }
+        return;
+      }
       if (item.type === "video") {
         const url = item.url.trim();
         if (!url || !httpsUrl(url)) {
@@ -98,6 +104,7 @@ export function validateLessons(
         errors[`quiz-${lessonIndex}-${itemIndex}`] = "Add a question.";
         return;
       }
+      if (!("questions" in item) || !item.questions) return;
       if (item.questions.length > 20) {
         errors[`quiz-${lessonIndex}-${itemIndex}`] = "Use 20 questions or fewer.";
         return;

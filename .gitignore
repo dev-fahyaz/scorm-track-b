@@ -4,3 +4,4 @@ test
 app/player/dist
 frontend/dist
 .env
+scripts/

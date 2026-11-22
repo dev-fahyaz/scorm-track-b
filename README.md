@@ -8,24 +8,105 @@ Supported SCORM versions:
 * SCORM 2004 3rd Edition
 * SCORM 2004 4th Edition
 
-## Dashboard
+## Local testing (optional dashboard)
 
-Install once from the repo root, then start the API and the dashboard together:
+The React dashboard is an **optional smoke harness**. Production packaging is the API (`POST /api/packages`) or `fromContent` — the course builder does not need this UI.
+
+Install once from the repo root:
 
 ```bash
 npm install
 npm install --prefix frontend
 pip install -r app/ppt/requirements.txt
-npm run dev
 ```
 
-Open http://localhost:5173/. The API listens on port 3001, and Vite proxies `/api` to it.
+| Command | What it starts |
+| --- | --- |
+| `npm run dev` | API on port 3001 **and** the dashboard (Vite) |
+| `npm start` | API only |
+| `npm run dev:ui` | Dashboard only (use when the API is already running) |
 
-`npm start` runs only the API.
+Open **http://localhost:5173/**. Vite proxies `/api` to `127.0.0.1:3001`.
 
-Copy `.env.example` to `.env` and set `OPENROUTER_API_KEY`. Drafts use OpenRouter auto unless `OPENROUTER_MODEL` is set. The key stays on the API. It is not sent to the browser.
+If the page is blank or the connection fails, check the terminal:
 
-The form starts with lessons and the organization. Each lesson can hold videos, quizzes, and a PowerPoint deck. **Add PowerPoint** reads a `.pptx` with PowerPoint installed on this machine, keeps the slide pictures on the server until build, and puts them in the zip. A deck is one launch file: the learner moves through the slides, notes, and hotspots. A YouTube or mp4 hotspot plays in the lesson player. Reaching the last slides completes the item by the same watch threshold as a video. A video is an https file URL or a YouTube link. An optional note tells the draft what the course is about. Titles, the description, keywords, durations, rights, the identifier, and the mastery score can be left blank. **Open zip** refills the form from a zip this dashboard built.
+* Port **3001** already in use → an API is already up; run `npm run dev:ui`, or stop the other process and restart `npm run dev`.
+* Port **5173** already in use → Vite may print `Local: http://localhost:5174/` (or another port). Use that URL.
+* `npm run dev` no longer kills the dashboard when the API fails to bind.
+
+Copy `.env.example` to `.env` and set `OPENROUTER_API_KEY` if you use **Draft course**. Drafts use OpenRouter auto unless `OPENROUTER_MODEL` is set. The key stays on the API.
+
+Use the form for videos, quizzes, PowerPoint, or **Paste content JSON** (`{ common, specific }` from ASAT). Shared schemas live in `models/` (see `docs/content-types.md`).
+
+### Integration (no dashboard required)
+
+`POST /api/packages` accepts lesson items shaped like the course builder:
+
+```json
+{
+  "version": "1.2",
+  "title": "Phishing basics",
+  "organization": "Acme",
+  "language": "en",
+  "identifier": "phishing-basics",
+  "masteryScore": 80,
+  "completionThreshold": 90,
+  "requireQuizPass": true,
+  "lessons": [{
+    "title": "Lesson 1",
+    "items": [
+      {
+        "common": { "contentName": "Intro", "contentType": "TEXT", "status": "PUBLISHED" },
+        "specific": { "title": "Intro", "paragraph": "Welcome.", "textColor": "#111111", "backgroundColor": "#ffffff" }
+      },
+      {
+        "common": { "contentName": "Watch", "contentType": "VIDEO", "status": "PUBLISHED" },
+        "specific": { "interactiveVideo": { "videoUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } }
+      },
+      {
+        "common": { "contentName": "Match terms", "contentType": "QUIZ", "status": "PUBLISHED" },
+        "specific": {
+          "quizType": "matching",
+          "question": "Match each term",
+          "pairs": [
+            { "inputTypeLeft": "text", "inputTypeRight": "text", "valueLeft": "Phishing", "valueRight": "Fake email" }
+          ]
+        }
+      }
+    ]
+  }],
+  "package": {
+    "name": "phishing-basics",
+    "version": "1.0.0",
+    "author": "",
+    "description": "Demo",
+    "keywords": ["security"],
+    "duration": "PT0H10M0S",
+    "typicalDuration": "PT0H10M0S",
+    "rights": "",
+    "zip": true,
+    "vcard": { "author": "", "org": "Acme", "tel": "", "address": "", "mail": "", "url": "" }
+  }
+}
+```
+
+Library helper (same payload shape):
+
+```js
+const { fromContent } = require("./app/course/fromContent");
+const { buildCourse } = require("./app/course/assemble");
+
+const body = fromContent({
+  title: "Phishing basics",
+  organization: "Acme",
+  identifier: "phishing-basics",
+  items: [/* { common, specific } … */],
+});
+```
+
+Legacy `{ type: "video" | "quiz" | "deck" }` items still work.
+
+The form can also hold videos, quizzes, and a PowerPoint deck. **Add PowerPoint** reads a `.pptx` with PowerPoint installed on this machine, keeps the slide pictures on the server until build, and puts them in the zip. A video is an https file URL or a YouTube link. **Open zip** refills the form from a zip this dashboard built. **Paste content JSON** appends a content-types item without building a full authoring UI.
 
 **Draft course** fills those fields from OpenRouter. It uses the video URLs and the note. It does not invent quiz questions. The fields stay editable. **Build SCORM zip** uses the form as it stands, and drafts first when the title, identifier, or description is still empty.
 

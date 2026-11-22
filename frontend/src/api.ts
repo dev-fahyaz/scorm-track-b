@@ -26,7 +26,9 @@ export async function draftCourse(body: PackageRequest): Promise<DraftResult> {
             ? { type: "quiz", title: item.title }
             : item.type === "deck"
               ? { type: "deck", title: item.title, deckId: item.deckId }
-              : { type: "video", title: item.title, url: item.url }
+              : item.type === "content"
+                ? { type: "content", title: item.title, common: item.common, specific: item.specific }
+                : { type: "video", title: item.title, url: item.url }
         ),
       })),
     }),

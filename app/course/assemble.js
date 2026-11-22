@@ -157,7 +157,34 @@ async function buildCourse(body, playerFile, loadDeck) {
       title: config.title,
       identifier: config.identifier,
       version: config.version,
-      lessons,
+      lessons: lessons.map((lesson) => ({
+        title: lesson.title,
+        items: lesson.items.map((item) => {
+          if (item.type === "deck") {
+            return {
+              type: "deck",
+              contentType: "DECK",
+              title: item.title,
+              href: item.href,
+              slides: item.slides,
+              width: item.width,
+              height: item.height,
+            };
+          }
+          const packed = {
+            type: item.type,
+            contentType: item.contentType || (item.type === "quiz" ? "QUIZ" : "VIDEO"),
+            title: item.title,
+            href: item.href,
+            common: item.common || null,
+            specific: item.specific || null,
+          };
+          if (item.url) packed.url = item.url;
+          if (Array.isArray(item.questions)) packed.questions = item.questions;
+          if (item.legacyQuiz) packed.legacyQuiz = true;
+          return packed;
+        }),
+      })),
       completionThreshold: body.completionThreshold / 100,
       masteryScore: body.masteryScore,
       requireQuizPass: body.requireQuizPass,

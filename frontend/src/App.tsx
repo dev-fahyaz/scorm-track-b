@@ -6,6 +6,7 @@ import {
   itemHref,
   formatAt,
   joinAt,
+  newContentItem,
   newDeck,
   newLesson,
   newQuestion,
@@ -16,6 +17,7 @@ import {
   splitAt,
   toRequest,
   withKind,
+  type ContentItem,
   type DeckItem,
   type LessonGroup,
   type LessonItem,
@@ -25,6 +27,7 @@ import {
   type QuizQuestion,
   type ScormVersion,
 } from "./types";
+import CONTENT_TYPE_LABELS from "@models/contentTypeLabels.json";
 import { manifestId, needsDraft, organizationId, validateForm, validateLessons } from "./validate";
 
 const VERSIONS: ScormVersion[] = ["1.2", "2004 3rd Edition", "2004 4th Edition"];
@@ -37,6 +40,8 @@ export function App() {
   const pptInputs = useRef<Record<string, HTMLInputElement | null>>({});
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
+  const [pasteJson, setPasteJson] = useState("");
+  const [pasteLessonId, setPasteLessonId] = useState("");
 
   function update<K extends keyof PackageForm>(key: K, value: PackageForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -116,6 +121,39 @@ export function App() {
       setMessage(error instanceof Error ? error.message : "The zip could not be opened.");
     } finally {
       setBusy(null);
+    }
+  }
+
+  function onPasteContent(lessonId: string) {
+    setMessage("");
+    setFailed(false);
+    try {
+      const parsed = JSON.parse(pasteJson) as {
+        common?: { contentName?: string; contentType?: string };
+        specific?: Record<string, unknown>;
+        title?: string;
+      };
+      if (!parsed?.common?.contentType || !parsed.specific || typeof parsed.specific !== "object") {
+        throw new Error("Paste a content item with common.contentType and specific.");
+      }
+      const item = newContentItem(
+        {
+          contentName: String(parsed.common.contentName || parsed.title || "Content"),
+          contentType: String(parsed.common.contentType),
+          description: "",
+          status: "PUBLISHED",
+        },
+        parsed.specific
+      );
+      updateLesson(lessonId, (current) => ({
+        ...current,
+        items: [...current.items, item],
+      }));
+      setPasteJson("");
+      setMessage(`Added ${parsed.common.contentType} content item.`);
+    } catch (error) {
+      setFailed(true);
+      setMessage(error instanceof Error ? error.message : "Could not parse content JSON.");
     }
   }
 
@@ -219,8 +257,8 @@ export function App() {
           <p className="eyebrow">Track B</p>
           <h1>SCORM export</h1>
           <p className="lede">
-            Group videos and quizzes into lessons. Draft fills the course record,
-            then the packager writes a zip Track A can launch.
+            Optional local test harness for Track B. Build a SCORM zip from videos,
+            quizzes, PowerPoint, or pasted content JSON — production packaging uses the API.
           </p>
         </div>
         <div className="version-pill">
@@ -232,7 +270,7 @@ export function App() {
         <section>
           <h2>Lessons</h2>
           <p className="section-note">
-            Each lesson can hold videos, quizzes, and a PowerPoint deck. Add questions on a video to pause at a time, or add a quiz as its own launch file. A deck is one launch file of slide pictures, notes, and links. Media stays on its host. The zip contains the player and the slide pictures, not the video.
+            Add videos, quizzes, and PowerPoint decks here to smoke-test packaging. Paste content JSON to try ASAT content-types items without the full course builder. The zip holds the player and package files — not remote media.
           </p>
           <div className="file-row">
             <button
@@ -347,6 +385,13 @@ export function App() {
                   >
                     {busy === "slides" ? "Reading…" : "Add PowerPoint"}
                   </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setPasteLessonId(pasteLessonId === lesson.id ? "" : lesson.id)}
+                  >
+                    Paste content JSON
+                  </button>
                   <input
                     ref={(node) => {
                       pptInputs.current[lesson.id] = node;
@@ -361,6 +406,25 @@ export function App() {
                     }}
                   />
                 </div>
+                {pasteLessonId === lesson.id ? (
+                  <div className="paste-panel">
+                    <p className="hint">
+                      Paste a {"{ common, specific }"} item from the course builder to smoke-test packaging.
+                    </p>
+                    <textarea
+                      id={`paste-${lesson.id}`}
+                      value={pasteJson}
+                      rows={8}
+                      placeholder='{"common":{"contentName":"Intro","contentType":"TEXT"},"specific":{"paragraph":"Hello"}}'
+                      onChange={(event) => setPasteJson(event.target.value)}
+                    />
+                    <div className="file-row">
+                      <button type="button" className="text-button" onClick={() => onPasteContent(lesson.id)}>
+                        Add content item
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
@@ -595,6 +659,31 @@ export function App() {
   );
 }
 
+function contentLabel(item: ContentItem): string {
+  const type = item.common.contentType;
+  return CONTENT_TYPE_LABELS[type] || type || "Content";
+}
+
+function ContentPreview(props: { item: ContentItem; error?: string }) {
+  const quizType =
+    props.item.common.contentType === "QUIZ" && props.item.specific && typeof props.item.specific.quizType === "string"
+      ? String(props.item.specific.quizType)
+      : "";
+  return (
+    <div className="content-preview">
+      <Field label="Title" name={`content-title-${props.item.id}`}>
+        <input value={props.item.title || props.item.common.contentName} readOnly />
+      </Field>
+      <p className="hint">
+        {props.item.common.contentType}
+        {quizType ? ` · ${quizType}` : ""}. Authored in the course builder — packaging only here.
+      </p>
+      {props.error ? <p className="error">{props.error}</p> : null}
+      <pre className="json-preview">{JSON.stringify({ common: props.item.common, specific: props.item.specific }, null, 2)}</pre>
+    </div>
+  );
+}
+
 function SubLesson(props: {
   lesson: LessonGroup;
   item: LessonItem;
@@ -609,7 +698,15 @@ function SubLesson(props: {
   return (
     <div className="sublesson">
       <div className="lesson-head">
-        <p className="sublesson-label">{item.type === "quiz" ? "Quiz" : item.type === "deck" ? "Slides" : "Video"}</p>
+        <p className="sublesson-label">
+          {item.type === "quiz"
+            ? "Quiz"
+            : item.type === "deck"
+              ? "Slides"
+              : item.type === "content"
+                ? contentLabel(item)
+                : "Video"}
+        </p>
         <button
           type="button"
           className="text-button"
@@ -619,7 +716,9 @@ function SubLesson(props: {
           Remove
         </button>
       </div>
-      {item.type === "video" ? (
+      {item.type === "content" ? (
+        <ContentPreview item={item} error={props.errors[`content-${lessonIndex}-${itemIndex}`]} />
+      ) : item.type === "video" ? (
         <>
           <div className="grid">
             <Field label="Video title" name={`video-title-${lessonIndex}-${itemIndex}`}>
@@ -668,7 +767,7 @@ function SubLesson(props: {
           error={props.errors[`deck-${lessonIndex}-${itemIndex}`]}
           onChange={props.onChange}
         />
-      ) : (
+      ) : item.type === "quiz" ? (
         <QuizEditor
           item={item}
           lessonIndex={lessonIndex}
@@ -676,7 +775,7 @@ function SubLesson(props: {
           errors={props.errors}
           onChange={props.onChange}
         />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -1097,8 +1196,11 @@ function StructureNode(props: { lesson: LessonGroup; lessonIndex: number; manife
         Item <span className="muted">item_{manifest}{suffix}</span>
         <ul>
           <li>Title: {title}</li>
-          {item && item.type !== "deck" && item.questions.length ? <li>Questions: {item.questions.length}</li> : null}
+          {item && (item.type === "video" || item.type === "quiz") && item.questions.length ? (
+            <li>Questions: {item.questions.length}</li>
+          ) : null}
           {item && item.type === "deck" ? <li>Slides: {item.slides.length}</li> : null}
+          {item && item.type === "content" ? <li>Type: {item.common.contentType}</li> : null}
           <li>Launch: {item ? itemHref(lessonIndex, 0, 1) : "—"}</li>
           <li>Resource: resource_{manifest}{suffix}</li>
         </ul>
@@ -1113,14 +1215,32 @@ function StructureNode(props: { lesson: LessonGroup; lessonIndex: number; manife
         <li>Title: {lessonTitle}</li>
         {lesson.items.map((item, itemIndex) => {
           const child = `_${lessonIndex + 1}_${itemIndex + 1}`;
-          const title = item.title.trim() || (item.type === "quiz" ? `Quiz ${itemIndex + 1}` : item.type === "deck" ? `Slides ${itemIndex + 1}` : `Video ${itemIndex + 1}`);
+          const title =
+            item.title.trim() ||
+            (item.type === "quiz"
+              ? `Quiz ${itemIndex + 1}`
+              : item.type === "deck"
+                ? `Slides ${itemIndex + 1}`
+                : item.type === "content"
+                  ? item.common.contentName || `Content ${itemIndex + 1}`
+                  : `Video ${itemIndex + 1}`);
+          const kind =
+            item.type === "quiz"
+              ? "Quiz"
+              : item.type === "deck"
+                ? "Slides"
+                : item.type === "content"
+                  ? contentLabel(item)
+                  : "Video";
           return (
             <li key={item.id}>
-              {item.type === "quiz" ? "Quiz" : item.type === "deck" ? "Slides" : "Video"} <span className="muted">item_{manifest}{child}</span>
+              {kind} <span className="muted">item_{manifest}{child}</span>
               <ul>
                 <li>Title: {title}</li>
                 {item.type === "deck" ? <li>Slides: {item.slides.length}</li> : null}
-                {item.type !== "deck" && item.questions.length ? <li>Questions: {item.questions.length}</li> : null}
+                {(item.type === "video" || item.type === "quiz") && item.questions.length ? (
+                  <li>Questions: {item.questions.length}</li>
+                ) : null}
                 <li>Launch: {itemHref(lessonIndex, itemIndex, lesson.items.length)}</li>
                 <li>Resource: resource_{manifest}{child}</li>
               </ul>

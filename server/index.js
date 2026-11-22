@@ -134,8 +134,17 @@ app.post("/api/packages", async (req, res) => {
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3001;
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`Track B API listening on ${port}`);
+  });
+  server.on("error", (error) => {
+    if (error && error.code === "EADDRINUSE") {
+      console.error(
+        `Port ${port} is already in use. Stop the other process, or keep using that API and run the dashboard with: npm run dev:ui`
+      );
+      process.exit(1);
+    }
+    throw error;
   });
 }
 

@@ -19,16 +19,8 @@ import {
 } from "./suspend";
 import { mountDeck, type DeckSlide } from "./deck";
 import { mountYouTube, youtubeId, type YouTubeHandle } from "./youtube";
-
-interface CourseItem {
-  type?: "video" | "quiz" | "deck";
-  title?: string;
-  url?: string;
-  videoUrl?: string;
-  href?: string;
-  questions?: unknown;
-  slides?: DeckSlide[];
-}
+import { isContentItem, mountContentBody } from "./content/router";
+import type { CourseItem, MountContext } from "./content/types";
 
 interface CourseLesson {
   title?: string;
@@ -224,6 +216,235 @@ function startWatch(options: {
   };
 }
 
+function makeContentContext(options: {
+  root: HTMLElement;
+  quizRoot: HTMLElement;
+  video: HTMLVideoElement;
+  youtubeFrame: HTMLElement;
+  item: CourseItem;
+  adapter: ScormAdapter | null;
+  mastery: number;
+  requirePass: boolean;
+  threshold: number;
+  sessionStart: number;
+  apiName: string;
+  poster: string | null;
+}): MountContext {
+  const finish = () => {
+    if (!options.adapter) return;
+    options.adapter.setSessionTime((Date.now() - options.sessionStart) / 1000);
+    options.adapter.terminate();
+  };
+  window.addEventListener("pagehide", finish);
+
+  return {
+    root: options.root,
+    quizRoot: options.quizRoot,
+    video: options.video,
+    youtubeFrame: options.youtubeFrame,
+    item: options.item,
+    adapter: options.adapter,
+    mastery: options.mastery,
+    requirePass: options.requirePass,
+    threshold: options.threshold,
+    sessionStart: options.sessionStart,
+    apiName: options.apiName,
+    poster: options.poster,
+    setStatus,
+    reportScore(score, passed, complete, interactions) {
+      if (options.adapter) {
+        options.adapter.setScore(score, 0, 100);
+        options.adapter.setProgress(score / 100);
+        if (interactions?.length) options.adapter.setInteractions(interactions);
+        options.adapter.setSuccess(passed);
+        options.adapter.setCompletion(complete);
+        options.adapter.setSessionTime((Date.now() - options.sessionStart) / 1000);
+        options.adapter.commit();
+      }
+      if (passed) setStatus(`Passed with ${score}. Reported to ${options.apiName}.`);
+      else if (complete) setStatus(`Score ${score}. Reported to ${options.apiName}.`);
+      else setStatus(`Score ${score}. Mastery is ${options.mastery}. The item stays incomplete.`);
+    },
+    reportComplete(complete) {
+      if (options.adapter) {
+        options.adapter.setProgress(complete ? 1 : 0);
+        options.adapter.setCompletion(complete);
+        options.adapter.setSuccess(complete ? true : null);
+        options.adapter.setSessionTime((Date.now() - options.sessionStart) / 1000);
+        options.adapter.commit();
+      }
+      if (complete) setStatus(`Completed. Reported to ${options.apiName}.`);
+    },
+  };
+}
+
+function videoUrlOf(item: CourseItem): string {
+  if (item.url || item.videoUrl) return String(item.url || item.videoUrl || "").trim();
+  const specific = item.specific || {};
+  const interactive = (specific.interactiveVideo || {}) as Record<string, unknown>;
+  return String(interactive.processVideoUrl || interactive.videoUrl || "").trim();
+}
+
+async function playVideoItem(options: {
+  item: CourseItem;
+  config: CourseConfig;
+  video: HTMLVideoElement;
+  youtubeFrame: HTMLElement;
+  quizRoot: HTMLElement;
+  adapter: ScormAdapter | null;
+  kind: "1.2" | "2004" | null;
+  sessionStart: number;
+  mastery: number;
+  requirePass: boolean;
+}): Promise<void> {
+  const url = videoUrlOf(options.item);
+  if (!url) {
+    setStatus("This lesson has no video URL.");
+    return;
+  }
+
+  const threshold = Number(options.config.completionThreshold);
+  const questions = readQuestions(options.item.questions, true);
+  let currentTime = 0;
+  let duration = 0;
+  const position = () => ({ current: currentTime, duration });
+  const savedMarks = options.adapter ? decodeSuspend(options.adapter.getSuspendData())?.marks || "" : "";
+  let reportWatch: (finish: boolean) => void = () => {};
+  let handle: YouTubeHandle | null = null;
+  const media = {
+    pause() {
+      if (handle) handle.pause();
+      else options.video.pause();
+    },
+    play() {
+      if (handle) handle.play();
+      else void options.video.play();
+    },
+    seek(seconds: number) {
+      if (handle) handle.seek(seconds);
+      else options.video.currentTime = seconds;
+    },
+  };
+  const checkpoints: CheckpointSession | null = questions.length
+    ? createCheckpointSession({
+      questions,
+      savedMarks,
+      root: options.quizRoot,
+      mastery: options.mastery,
+      requirePass: options.requirePass,
+      media,
+      onChange() {
+        reportWatch(false);
+      },
+    })
+    : null;
+  const quiz = checkpoints
+    ? {
+      active: true,
+      requirePass: options.requirePass,
+      mastery: options.mastery,
+      marks: () => checkpoints.marks(),
+      outcome: () => checkpoints.outcome(),
+      interactions: () => checkpoints.interactions(),
+    }
+    : undefined;
+  checkpoints?.resume();
+
+  const videoId = youtubeId(url);
+  if (videoId) {
+    options.video.classList.add("off");
+    options.youtubeFrame.classList.add("on");
+    const hold = { message: "" };
+    const watch = startWatch({
+      adapter: options.adapter,
+      kind: options.kind,
+      sessionStart: options.sessionStart,
+      threshold,
+      position,
+      hold,
+      quiz,
+    });
+    reportWatch = watch.report;
+    try {
+      handle = await mountYouTube({
+        elementId: "youtube",
+        videoId,
+        resume: watch.bookmark,
+        onTime: (current, length) => {
+          currentTime = current;
+          duration = length;
+          watch.note(current, length);
+          checkpoints?.onTime(current, length);
+        },
+        onEnded: () => {
+          currentTime = Math.max(0, duration - 0.01);
+          watch.note(currentTime, duration);
+          checkpoints?.onEnded();
+          watch.report(false);
+        },
+        onPlay: () => {
+          if (checkpoints?.isLocked()) handle?.pause();
+        },
+        onError: (message) => {
+          hold.message = message;
+          setStatus(message);
+        },
+      });
+    } catch {
+      hold.message = "YouTube could not be loaded, so playback could not be tracked.";
+      setStatus(hold.message);
+    }
+    window.addEventListener("pagehide", () => handle?.stop());
+    return;
+  }
+
+  options.video.src = url;
+  if (options.config.poster) options.video.poster = options.config.poster;
+  const watch = startWatch({
+    adapter: options.adapter,
+    kind: options.kind,
+    sessionStart: options.sessionStart,
+    threshold,
+    position,
+    quiz,
+  });
+  reportWatch = watch.report;
+  const seek = () => {
+    if (watch.bookmark > 0) {
+      options.video.currentTime = Math.min(
+        watch.bookmark,
+        Number.isFinite(options.video.duration) ? options.video.duration : watch.bookmark
+      );
+    }
+    options.video.removeEventListener("loadedmetadata", seek);
+  };
+  if (options.video.readyState >= 1) seek();
+  else options.video.addEventListener("loadedmetadata", seek);
+
+  options.video.addEventListener("play", () => {
+    if (checkpoints?.isLocked()) options.video.pause();
+  });
+  options.video.addEventListener("seeking", () => {
+    checkpoints?.onTime(options.video.currentTime, options.video.duration || 0);
+  });
+  options.video.addEventListener("timeupdate", () => {
+    currentTime = options.video.currentTime;
+    duration = options.video.duration;
+    watch.note(currentTime, duration);
+    checkpoints?.onTime(currentTime, duration);
+  });
+  options.video.addEventListener("ended", () => {
+    currentTime = Math.max(0, options.video.duration - 0.01);
+    duration = options.video.duration;
+    watch.note(currentTime, duration);
+    checkpoints?.onEnded();
+    watch.report(false);
+  });
+  options.video.addEventListener("error", () => {
+    setStatus("The video could not be loaded. Check the URL and that the host allows playback.");
+  });
+}
+
 async function main(): Promise<void> {
   let config: CourseConfig;
   try {
@@ -239,7 +460,8 @@ async function main(): Promise<void> {
   const youtubeFrame = document.getElementById("youtube-frame");
   const quizRoot = document.getElementById("quiz");
   const deckRoot = document.getElementById("deck");
-  if (!(video instanceof HTMLVideoElement) || !youtubeFrame || !quizRoot || !deckRoot) {
+  const contentRoot = document.getElementById("content");
+  if (!(video instanceof HTMLVideoElement) || !youtubeFrame || !quizRoot || !deckRoot || !contentRoot) {
     setStatus("The lesson player is missing.");
     return;
   }
@@ -259,6 +481,47 @@ async function main(): Promise<void> {
   const mastery = Number(config.masteryScore);
   const requirePass = config.requireQuizPass !== false;
   const apiName = connected?.kind === "2004" ? "SCORM 2004" : "SCORM 1.2";
+
+  const contentType = item.contentType || item.common?.contentType || "";
+  if (
+    isContentItem(item) ||
+    (contentType === "QUIZ" && !item.legacyQuiz && item.type !== "quiz") ||
+    (item.type === "content")
+  ) {
+    video.classList.add("off");
+    if (contentType === "VIDEO" || contentType === "ANIMATION") {
+      video.classList.remove("off");
+      await playVideoItem({
+        item: { ...item, url: item.url || "" },
+        config,
+        video,
+        youtubeFrame,
+        quizRoot,
+        adapter,
+        kind: connected?.kind || null,
+        sessionStart,
+        mastery,
+        requirePass,
+      });
+      return;
+    }
+    const ctx = makeContentContext({
+      root: contentRoot,
+      quizRoot,
+      video,
+      youtubeFrame,
+      item,
+      adapter,
+      mastery,
+      requirePass,
+      threshold: Number(config.completionThreshold),
+      sessionStart,
+      apiName,
+      poster: config.poster,
+    });
+    await mountContentBody(ctx);
+    return;
+  }
 
   if (item.type === "quiz") {
     video.classList.add("off");
@@ -342,7 +605,7 @@ async function main(): Promise<void> {
 
   if (item.type === "deck") {
     video.classList.add("off");
-    const slides = Array.isArray(item.slides) ? item.slides : [];
+    const slides = Array.isArray(item.slides) ? (item.slides as DeckSlide[]) : [];
     if (!slides.length) {
       setStatus("This deck has no slides.");
       return;
@@ -366,151 +629,17 @@ async function main(): Promise<void> {
     return;
   }
 
-  const url = item.url || item.videoUrl || "";
-  if (!url) {
-    setStatus("This lesson has no video URL.");
-    return;
-  }
-
-  const threshold = Number(config.completionThreshold);
-  const questions = readQuestions(item.questions, true);
-  let currentTime = 0;
-  let duration = 0;
-  const position = () => ({ current: currentTime, duration });
-  const savedMarks = adapter ? decodeSuspend(adapter.getSuspendData())?.marks || "" : "";
-  let reportWatch: (finish: boolean) => void = () => {};
-  let handle: YouTubeHandle | null = null;
-  const media = {
-    pause() {
-      if (handle) handle.pause();
-      else video.pause();
-    },
-    play() {
-      if (handle) handle.play();
-      else void video.play();
-    },
-    seek(seconds: number) {
-      if (handle) handle.seek(seconds);
-      else video.currentTime = seconds;
-    },
-  };
-  const checkpoints: CheckpointSession | null = questions.length
-    ? createCheckpointSession({
-      questions,
-      savedMarks,
-      root: quizRoot,
-      mastery,
-      requirePass,
-      media,
-      onChange() {
-        reportWatch(false);
-      },
-    })
-    : null;
-  const quiz = checkpoints
-    ? {
-      active: true,
-      requirePass,
-      mastery,
-      marks: () => checkpoints.marks(),
-      outcome: () => checkpoints.outcome(),
-      interactions: () => checkpoints.interactions(),
-    }
-    : undefined;
-  checkpoints?.resume();
-
-  const videoId = youtubeId(url);
-  if (videoId) {
-    video.classList.add("off");
-    youtubeFrame.classList.add("on");
-    const hold = { message: "" };
-    const watch = startWatch({
-      adapter,
-      kind: connected?.kind || null,
-      sessionStart,
-      threshold,
-      position,
-      hold,
-      quiz,
-    });
-    reportWatch = watch.report;
-    try {
-      handle = await mountYouTube({
-        elementId: "youtube",
-        videoId,
-        resume: watch.bookmark,
-        onTime: (current, length) => {
-          currentTime = current;
-          duration = length;
-          watch.note(current, length);
-          checkpoints?.onTime(current, length);
-        },
-        onEnded: () => {
-          currentTime = Math.max(0, duration - 0.01);
-          watch.note(currentTime, duration);
-          checkpoints?.onEnded();
-          watch.report(false);
-        },
-        onPlay: () => {
-          if (checkpoints?.isLocked()) handle?.pause();
-        },
-        onError: (message) => {
-          hold.message = message;
-          setStatus(message);
-        },
-      });
-    } catch {
-      hold.message = "YouTube could not be loaded, so playback could not be tracked.";
-      setStatus(hold.message);
-    }
-    window.addEventListener("pagehide", () => handle?.stop());
-    return;
-  }
-
-  video.src = url;
-  if (config.poster) video.poster = config.poster;
-  const watch = startWatch({
+  await playVideoItem({
+    item,
+    config,
+    video,
+    youtubeFrame,
+    quizRoot,
     adapter,
     kind: connected?.kind || null,
     sessionStart,
-    threshold,
-    position,
-    quiz,
-  });
-  reportWatch = watch.report;
-  const seek = () => {
-    if (watch.bookmark > 0) {
-      video.currentTime = Math.min(
-        watch.bookmark,
-        Number.isFinite(video.duration) ? video.duration : watch.bookmark
-      );
-    }
-    video.removeEventListener("loadedmetadata", seek);
-  };
-  if (video.readyState >= 1) seek();
-  else video.addEventListener("loadedmetadata", seek);
-
-  video.addEventListener("play", () => {
-    if (checkpoints?.isLocked()) video.pause();
-  });
-  video.addEventListener("seeking", () => {
-    checkpoints?.onTime(video.currentTime, video.duration || 0);
-  });
-  video.addEventListener("timeupdate", () => {
-    currentTime = video.currentTime;
-    duration = video.duration;
-    watch.note(currentTime, duration);
-    checkpoints?.onTime(currentTime, duration);
-  });
-  video.addEventListener("ended", () => {
-    currentTime = Math.max(0, video.duration - 0.01);
-    duration = video.duration;
-    watch.note(currentTime, duration);
-    checkpoints?.onEnded();
-    watch.report(false);
-  });
-  video.addEventListener("error", () => {
-    setStatus("The video could not be loaded. Check the URL and that the host allows playback.");
+    mastery,
+    requirePass,
   });
 }
 

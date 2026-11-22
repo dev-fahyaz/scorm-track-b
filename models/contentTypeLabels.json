@@ -1,0 +1,16 @@
+{
+  "TEXT": "Text/Web-based",
+  "LINK": "Link",
+  "PDF": "PDF",
+  "QUESTION": "Question",
+  "SLIDE": "Slider show",
+  "TAB": "Tabbed",
+  "VIDEO": "Video",
+  "ANIMATION": "Animation",
+  "MARKDOWN": "Mark down",
+  "STORY_BLOCK": "Story Blocks",
+  "SLIDER_LEVEL": "Slider Level",
+  "QUIZ": "Quiz",
+  "INTERACTIVE_VIDEO": "Interactive Video",
+  "INTERACTIVE_CONTENT": "Interactive Content"
+}

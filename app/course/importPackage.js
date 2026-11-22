@@ -237,6 +237,47 @@ function formLessons(lessons, zip, saveDeck) {
           })),
         };
       }
+      if (item && item.common && item.specific && item.contentType && item.contentType !== "VIDEO" && item.contentType !== "QUIZ" && item.contentType !== "ANIMATION" && item.contentType !== "DECK") {
+        return {
+          id: crypto.randomUUID(),
+          type: "content",
+          title: String(item.title || item.common.contentName || ""),
+          common: item.common,
+          specific: item.specific,
+        };
+      }
+      if (item && (item.type === "quiz" || (item.contentType === "QUIZ" && item.legacyQuiz))) {
+        const questions = (Array.isArray(item.questions) ? item.questions : []).map((question) => (
+          formQuestion(question, false)
+        ));
+        if (item.common && item.specific && !item.legacyQuiz) {
+          return {
+            id: crypto.randomUUID(),
+            type: "content",
+            title: String(item.title || item.common.contentName || ""),
+            common: item.common,
+            specific: item.specific,
+          };
+        }
+        return {
+          id: crypto.randomUUID(),
+          type: "quiz",
+          title: String(item.title || ""),
+          questions: questions.length ? questions : [formQuestion(null, false)],
+        };
+      }
+      if (item && item.common && item.specific && (item.contentType === "VIDEO" || item.contentType === "ANIMATION" || item.contentType === "QUIZ")) {
+        return {
+          id: crypto.randomUUID(),
+          type: "content",
+          title: String(item.title || item.common.contentName || ""),
+          common: item.common,
+          specific: item.specific,
+          questions: Array.isArray(item.questions)
+            ? item.questions.map((question) => formQuestion(question, item.contentType !== "QUIZ"))
+            : undefined,
+        };
+      }
       if (item && item.type === "quiz") {
         const questions = (Array.isArray(item.questions) ? item.questions : []).map((question) => (
           formQuestion(question, false)

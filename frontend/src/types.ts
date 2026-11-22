@@ -58,7 +58,26 @@ export interface DeckItem {
   slides: DeckSlide[];
 }
 
-export type LessonItem = VideoItem | QuizItem | DeckItem;
+export interface ContentCommon {
+  contentName: string;
+  description?: string;
+  contentType: string;
+  status?: string;
+  author?: string;
+  tags?: string[];
+}
+
+/** Content-types payload from the external course builder */
+export interface ContentItem {
+  id: string;
+  type: "content";
+  title: string;
+  common: ContentCommon;
+  specific: Record<string, unknown>;
+  questions?: QuizQuestion[];
+}
+
+export type LessonItem = VideoItem | QuizItem | DeckItem | ContentItem;
 
 export interface LessonGroup {
   id: string;
@@ -104,12 +123,14 @@ export interface RequestQuestion {
 }
 
 export interface RequestItem {
-  type: "video" | "quiz" | "deck";
+  type: "video" | "quiz" | "deck" | "content";
   title: string;
   url?: string;
   questions?: RequestQuestion[];
   deckId?: string;
   slides?: DeckSlide[];
+  common?: ContentCommon;
+  specific?: Record<string, unknown>;
 }
 
 export interface PackageRequest {
@@ -322,6 +343,16 @@ function requestQuestion(question: QuizQuestion, withTime: boolean): RequestQues
   };
 }
 
+export function newContentItem(common: ContentCommon, specific: Record<string, unknown>): ContentItem {
+  return {
+    id: newId(),
+    type: "content",
+    title: String(common.contentName || "").trim(),
+    common,
+    specific,
+  };
+}
+
 function requestItem(item: LessonItem): RequestItem {
   if (item.type === "deck") {
     return {
@@ -329,6 +360,15 @@ function requestItem(item: LessonItem): RequestItem {
       title: item.title.trim(),
       deckId: item.deckId,
       slides: item.slides,
+    };
+  }
+  if (item.type === "content") {
+    return {
+      type: "content",
+      title: item.title.trim() || item.common.contentName,
+      common: item.common,
+      specific: item.specific,
+      questions: item.questions?.map((question) => requestQuestion(question, item.common.contentType === "VIDEO")),
     };
   }
   if (item.type === "quiz") {
